@@ -1,0 +1,39 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE unicode-names fixture: non-ASCII given names and surnames must round-trip
+1 CONT unchanged (no accent stripping, no mojibake).
+0 @I1@ INDI
+1 NAME José /Müller/
+1 SEX M
+1 BIRT
+2 DATE 1880
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Renée /Lefèvre/
+1 SEX F
+1 BIRT
+2 DATE 1883
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME 田中 /花子/
+1 SEX F
+1 BIRT
+2 DATE 1910
+1 FAMC @F1@
+0 @I4@ INDI
+1 NAME Šárka /Dvořák/
+1 SEX F
+1 BIRT
+2 DATE 1912
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 CHIL @I4@
+1 MARR
+2 DATE 1908
+0 TRLR

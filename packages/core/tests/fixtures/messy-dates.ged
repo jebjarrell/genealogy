@@ -1,0 +1,54 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE messy-dates fixture: every date qualifier, partial dates, a range, a
+1 CONT double-dated year, a Julian calendar escape, and an unparseable date.
+1 CONT The raw string must be preserved in every case.
+0 @I1@ INDI
+1 NAME About /Born/
+1 SEX M
+1 BIRT
+2 DATE ABT 1798
+1 DEAT
+2 DATE BEF 1860
+0 @I2@ INDI
+1 NAME After /Born/
+1 SEX F
+1 BIRT
+2 DATE AFT 1800
+1 BAPM
+2 DATE EST 1801
+0 @I3@ INDI
+1 NAME Between /Born/
+1 SEX M
+1 BIRT
+2 DATE BET 1810 AND 1815
+1 DEAT
+2 DATE CAL 1880
+0 @I4@ INDI
+1 NAME Partial /Dates/
+1 SEX F
+1 BIRT
+2 DATE JUN 1840
+1 RESI
+2 DATE 1845
+0 @I5@ INDI
+1 NAME Double /Dated/
+1 SEX M
+1 BIRT
+2 DATE 12 FEB 1745/46
+0 @I6@ INDI
+1 NAME Julian /Calendar/
+1 SEX F
+1 BIRT
+2 DATE @#DJULIAN@ 1700
+0 @I7@ INDI
+1 NAME Gibberish /Date/
+1 SEX M
+1 BIRT
+2 DATE sometime in the old days
+1 DEAT
+2 DATE 25 DEC 1899
+0 TRLR

@@ -70,6 +70,11 @@ const FORBIDDEN_CORE_PACKAGES = [
   'dagre',
 ];
 
+// The third-party GEDCOM parser may be imported ONLY by the adapter
+// (gedcom/parse.ts), so its types never leak into the rest of core (TRD §7.1).
+// Forbidden everywhere in core EXCEPT that one file.
+const CORE_FORBIDDEN_PACKAGES = [...FORBIDDEN_CORE_PACKAGES, 'read-gedcom'];
+
 /**
  * DOM / network globals that must never appear in core. `fetch` in particular is
  * the network boundary: core defines the PlaceResolver interface but never calls
@@ -137,10 +142,10 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
-          paths: [...NODE_BUILTINS, ...FORBIDDEN_CORE_PACKAGES].map((name) => ({
+          paths: [...NODE_BUILTINS, ...CORE_FORBIDDEN_PACKAGES].map((name) => ({
             name,
             message:
-              '@genealogy/core must be DOM-, network-, and Node-free (TRD §1/§3/§11). Move this dependency to apps/web or @genealogy/geo.',
+              '@genealogy/core must be DOM-, network-, and Node-free (TRD §1/§3/§11). Move this dependency to apps/web or @genealogy/geo. (read-gedcom is allowed only in gedcom/parse.ts.)',
           })),
           patterns: [
             {

@@ -1,0 +1,129 @@
+0 HEAD
+1 SOUR GenealogyTRD
+2 NAME Pedigree Collapse Fixture
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 NOTE Pedigree-collapse fixture (TRD 12.1 — the centerpiece acceptance gate).
+1 CONT An asymmetric cousin marriage: focal person Paul (@I11@) descends from the
+1 CONT root couple Alfred (@I1@) and Bertha (@I2@) by TWO distinct lineages of
+1 CONT DIFFERENT length, so each root ancestor is a pedigree-collapse point that
+1 CONT implies two relationships at two different generations.
+1 CONT
+1 CONT Paternal line (3 generations up to a root):  Paul -> George -> Charles -> Alfred/Bertha
+1 CONT Maternal line (4 generations up to a root):  Paul -> Helen  -> Xavier  -> Diana -> Alfred/Bertha
+1 CONT
+1 CONT EXPECTED (documented acceptance values, asserted in the tests):
+1 CONT   detectPedigreeCollapse(@I11@) -> exactly 2 collapse points: @I1@ and @I2@.
+1 CONT   enumeratePaths(@I11@, @I1@) -> exactly 2 paths:
+1 CONT       [I11,I7,I3,I1] (len 3)   and   [I11,I10,I8,I4,I1] (len 4)
+1 CONT   enumeratePaths(@I11@, @I2@) -> exactly 2 paths:
+1 CONT       [I11,I7,I3,I2] (len 3)   and   [I11,I10,I8,I4,I2] (len 4)
+1 CONT   Alfred (@I1@) is Paul's great-grandfather via the paternal line (gen 3)
+1 CONT   and his 2nd great-grandfather via the maternal line (gen 4).
+1 CONT   minimal.ged-style sanity: no OTHER individual is reached more than once.
+0 @I1@ INDI
+1 NAME Alfred /Root/
+1 SEX M
+1 BIRT
+2 DATE 1850
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Bertha /Root/
+1 SEX F
+1 BIRT
+2 DATE 1852
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Charles /Root/
+1 SEX M
+1 BIRT
+2 DATE 1875
+1 FAMC @F1@
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Diana /Root/
+1 SEX F
+1 BIRT
+2 DATE 1878
+1 FAMC @F1@
+1 FAMS @F3@
+0 @I5@ INDI
+1 NAME Edith /Outsider/
+1 SEX F
+1 BIRT
+2 DATE 1877
+1 FAMS @F2@
+0 @I6@ INDI
+1 NAME Frank /Outsider/
+1 SEX M
+1 BIRT
+2 DATE 1874
+1 FAMS @F3@
+0 @I7@ INDI
+1 NAME George /Paternal/
+1 SEX M
+1 BIRT
+2 DATE 1905
+1 FAMC @F2@
+1 FAMS @F5@
+0 @I8@ INDI
+1 NAME Xavier /Maternal/
+1 SEX M
+1 BIRT
+2 DATE 1903
+1 FAMC @F3@
+1 FAMS @F4@
+0 @I9@ INDI
+1 NAME Yvonne /Outsider/
+1 SEX F
+1 BIRT
+2 DATE 1908
+1 FAMS @F4@
+0 @I10@ INDI
+1 NAME Helen /Maternal/
+1 SEX F
+1 BIRT
+2 DATE 1932
+1 FAMC @F4@
+1 FAMS @F5@
+0 @I11@ INDI
+1 NAME Paul /Focal/
+1 SEX M
+1 BIRT
+2 DATE 1960
+2 PLAC Floyd, Kentucky, United States
+1 FAMC @F5@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 CHIL @I4@
+1 MARR
+2 DATE 1874
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I5@
+1 CHIL @I7@
+1 MARR
+2 DATE 1904
+0 @F3@ FAM
+1 HUSB @I6@
+1 WIFE @I4@
+1 CHIL @I8@
+1 MARR
+2 DATE 1902
+0 @F4@ FAM
+1 HUSB @I8@
+1 WIFE @I9@
+1 CHIL @I10@
+1 MARR
+2 DATE 1931
+0 @F5@ FAM
+1 HUSB @I7@
+1 WIFE @I10@
+1 CHIL @I11@
+1 MARR
+2 DATE 1959
+0 TRLR

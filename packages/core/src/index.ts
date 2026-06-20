@@ -8,5 +8,10 @@
 // ---- Types (TRD §5) ----------------------------------------------------
 export type * from './types/index.js';
 
+// ---- Parsing (TRD §6, §7) ----------------------------------------------
+// Adapter over the third-party GEDCOM parser. Produces the normalized model.
+// Never throws on malformed input; collects warnings instead.
+export { parseGedcom } from './gedcom/parse.js';
+
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';

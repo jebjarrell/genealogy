@@ -1,0 +1,36 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE messy-places fixture: the same place written three ways (spacing + case),
+1 CONT a deep 4-level hierarchy, and a historical jurisdiction. The three spelling
+1 CONT variants must deduplicate to a single shared Place keyed on the normalized form.
+0 @I1@ INDI
+1 NAME Alice /Traveler/
+1 SEX F
+1 BIRT
+2 DATE 1840
+2 PLAC Floyd, Kentucky, United States
+1 RESI
+2 DATE 1860
+2 PLAC Floyd,  Kentucky,   United States
+1 DEAT
+2 DATE 1900
+2 PLAC floyd, kentucky, united states
+0 @I2@ INDI
+1 NAME Boris /Deep/
+1 SEX M
+1 BIRT
+2 DATE 1850
+2 PLAC 12 Main Street, Pikeville, Floyd, Kentucky, United States
+0 @I3@ INDI
+1 NAME Olga /Historical/
+1 SEX F
+1 BIRT
+2 DATE 1860
+2 PLAC St. Petersburg, Russian Empire
+1 IMMI
+2 DATE 1890
+2 PLAC Ellis Island, New York, United States
+0 TRLR

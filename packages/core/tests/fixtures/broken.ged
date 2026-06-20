@@ -1,0 +1,37 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE broken fixture: dangling pointers, an unknown custom tag, an individual
+1 CONT with no NAME, and a gibberish date. It must parse to a USABLE model plus
+1 CONT warnings — never throw. Dangling parent/child pointers simply yield no edge.
+0 @I1@ INDI
+1 NAME Valid /Person/
+1 SEX M
+1 BIRT
+2 DATE 1900
+1 _CUSTOMTAG some vendor-specific value
+1 FAMS @F1@
+1 FAMC @F99@
+0 @I2@ INDI
+1 NAME Spouse /Person/
+1 SEX F
+1 BIRT
+2 DATE not a real date at all
+1 FAMS @F1@
+0 @I3@ INDI
+1 SEX U
+1 NOTE This individual has no NAME record.
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 CHIL @I98@
+1 MARR
+2 DATE 1925
+0 @F2@ FAM
+1 HUSB @I97@
+1 WIFE @I2@
+0 TRLR

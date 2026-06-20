@@ -1,0 +1,60 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE multiple-marriages fixture: @I1@ marries twice and has children in each
+1 CONT family, so @I1@ has two FAMS pointers and the two child sets are half-siblings.
+0 @I1@ INDI
+1 NAME Henry /King/
+1 SEX M
+1 BIRT
+2 DATE 1820
+1 FAMS @F1@
+1 FAMS @F2@
+0 @I2@ INDI
+1 NAME Catherine /First/
+1 SEX F
+1 BIRT
+2 DATE 1822
+1 DEAT
+2 DATE 1850
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Anne /Second/
+1 SEX F
+1 BIRT
+2 DATE 1830
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Mary /King/
+1 SEX F
+1 BIRT
+2 DATE 1845
+1 FAMC @F1@
+0 @I5@ INDI
+1 NAME Edward /King/
+1 SEX M
+1 BIRT
+2 DATE 1848
+1 FAMC @F1@
+0 @I6@ INDI
+1 NAME Elizabeth /King/
+1 SEX F
+1 BIRT
+2 DATE 1855
+1 FAMC @F2@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I4@
+1 CHIL @I5@
+1 MARR
+2 DATE 1843
+0 @F2@ FAM
+1 HUSB @I1@
+1 WIFE @I3@
+1 CHIL @I6@
+1 MARR
+2 DATE 1852
+0 TRLR

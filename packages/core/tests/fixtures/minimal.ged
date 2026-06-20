@@ -1,0 +1,40 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Smith/
+1 SEX M
+1 BIRT
+2 DATE 12 JAN 1900
+2 PLAC New York, New York, United States
+1 DEAT
+2 DATE 1975
+1 FAMS @F1@
+1 SOUR @S1@
+2 PAGE p. 42
+0 @I2@ INDI
+1 NAME Jane /Doe/
+1 SEX F
+1 BIRT
+2 DATE 3 MAR 1902
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME William /Smith/
+1 SEX M
+1 BIRT
+2 DATE 1925
+2 PLAC Boston, Massachusetts, United States
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 MARR
+2 DATE 14 JUN 1924
+2 PLAC New York, New York, United States
+0 @S1@ SOUR
+1 TITL 1940 United States Federal Census
+0 TRLR
