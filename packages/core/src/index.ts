@@ -18,5 +18,18 @@ export { buildGraph } from './graph/build.js';
 export { getAncestors, getDescendants } from './graph/traversal.js';
 export { computeGenerations } from './graph/generations.js';
 
+// ---- Paths, collapse & common ancestors (centerpiece; TRD §6, §7.3) ----
+export {
+  enumeratePaths,
+  enumerateRelationshipPaths,
+  DEFAULT_MAX_PATHS,
+  DEFAULT_MAX_DEPTH,
+} from './graph/paths.js';
+export type { EnumeratePathsOptions, PathEnumeration } from './graph/paths.js';
+export { detectPedigreeCollapse } from './graph/collapse.js';
+export type { CollapsePoint, DetectCollapseOptions } from './graph/collapse.js';
+export { findCommonAncestors } from './graph/common-ancestors.js';
+export type { CommonAncestor } from './graph/common-ancestors.js';
+
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';
