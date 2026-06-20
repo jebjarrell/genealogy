@@ -122,7 +122,8 @@ describe('NominatimResolver', () => {
     expect(capturedUrl).toContain('https://example.test/search');
     expect(capturedUrl).toContain('format=jsonv2');
     expect(capturedUrl).toContain('limit=1');
-    expect(capturedUrl).toContain(encodeURIComponent('Floyd, Kentucky, United States'));
+    // URLSearchParams form-encodes spaces as '+', which Nominatim accepts.
+    expect(capturedUrl).toContain('Floyd%2C+Kentucky%2C+United+States');
 
     const headers = new Headers(capturedInit?.headers);
     expect(headers.get('User-Agent')).toBe('genealogy-test/1.0');
@@ -145,7 +146,7 @@ describe('NominatimResolver', () => {
       makePlace({ raw: '', parts: ['Floyd', 'Kentucky', 'United States'] }),
     );
 
-    expect(capturedUrl).toContain(encodeURIComponent('Floyd, Kentucky, United States'));
+    expect(capturedUrl).toContain('Floyd%2C+Kentucky%2C+United+States');
   });
 
   it('enforces the minimum interval between requests', async () => {
