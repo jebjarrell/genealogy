@@ -1,0 +1,114 @@
+0 HEAD
+1 SOUR GenealogyTRD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 NOTE cousins fixture: a clean 3-generation tree (NO pedigree collapse) for
+1 CONT relationship-description tests — siblings, aunt/uncle, niece/nephew,
+1 CONT first cousins, first cousins once removed, and second cousins.
+1 CONT
+1 CONT Gen1: Grand /Sire/ (@I1@) + Grand /Dame/ (@I2@)
+1 CONT Gen2 (their children): Paul /Elder/ (@I3@) and Pamela /Younger/ (@I4@) are siblings
+1 CONT Gen3 (the children's children): Carl (@I7@, son of Paul) and Carol (@I8@, daughter of Pamela) are FIRST cousins
+1 CONT Gen4: Gary (@I11@, son of Carl) and Greta (@I12@, daughter of Carol) are SECOND cousins;
+1 CONT       Gary and Carol (@I8@) are first cousins once removed.
+0 @I1@ INDI
+1 NAME Grand /Sire/
+1 SEX M
+1 BIRT
+2 DATE 1850
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Grand /Dame/
+1 SEX F
+1 BIRT
+2 DATE 1852
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Paul /Elder/
+1 SEX M
+1 BIRT
+2 DATE 1875
+1 FAMC @F1@
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Pamela /Younger/
+1 SEX F
+1 BIRT
+2 DATE 1878
+1 FAMC @F1@
+1 FAMS @F3@
+0 @I5@ INDI
+1 NAME Sarah /Outsider/
+1 SEX F
+1 BIRT
+2 DATE 1877
+1 FAMS @F2@
+0 @I6@ INDI
+1 NAME Samuel /Outsider/
+1 SEX M
+1 BIRT
+2 DATE 1874
+1 FAMS @F3@
+0 @I7@ INDI
+1 NAME Carl /Elder/
+1 SEX M
+1 BIRT
+2 DATE 1900
+1 FAMC @F2@
+1 FAMS @F4@
+0 @I8@ INDI
+1 NAME Carol /Younger/
+1 SEX F
+1 BIRT
+2 DATE 1903
+1 FAMC @F3@
+1 FAMS @F5@
+0 @I9@ INDI
+1 NAME Nancy /Outsider/
+1 SEX F
+1 BIRT
+2 DATE 1902
+1 FAMS @F4@
+0 @I10@ INDI
+1 NAME Norman /Outsider/
+1 SEX M
+1 BIRT
+2 DATE 1900
+1 FAMS @F5@
+0 @I11@ INDI
+1 NAME Gary /Elder/
+1 SEX M
+1 BIRT
+2 DATE 1928
+1 FAMC @F4@
+0 @I12@ INDI
+1 NAME Greta /Younger/
+1 SEX F
+1 BIRT
+2 DATE 1931
+1 FAMC @F5@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 CHIL @I3@
+1 CHIL @I4@
+1 MARR
+2 DATE 1874
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I5@
+1 CHIL @I7@
+0 @F3@ FAM
+1 HUSB @I6@
+1 WIFE @I4@
+1 CHIL @I8@
+0 @F4@ FAM
+1 HUSB @I7@
+1 WIFE @I9@
+1 CHIL @I11@
+0 @F5@ FAM
+1 HUSB @I10@
+1 WIFE @I8@
+1 CHIL @I12@
+0 TRLR
