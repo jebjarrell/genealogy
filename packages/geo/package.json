@@ -1,0 +1,28 @@
+{
+  "name": "@genealogy/geo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Place-resolver implementations behind core's PlaceResolver interface: static table, Nominatim, caching chain, FamilySearch stub.",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@genealogy/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.0"
+  }
+}

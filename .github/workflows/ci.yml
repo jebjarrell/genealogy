@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The portability firewall (TRD §1/§3/§11): lint fails the build if any
+      # DOM / network / Node-only / rendering-library import appears in
+      # @genealogy/core. Wired in early and run on every push.
+      - name: Lint (enforces core portability boundary)
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      # The core suite runs under Node — the proof of the portability constraint.
+      - name: Test (core suite runs in Node)
+        run: pnpm test
