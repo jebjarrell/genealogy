@@ -1,6 +1,7 @@
 import { describeRelationship } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
+import { PlaceResolveButton } from './PlaceResolveButton.js';
 
 const EVENT_LABELS: Record<string, string> = {
   birth: 'Born',
@@ -127,7 +128,12 @@ export function DetailPanel() {
               <li key={e.id} className="text-sm text-gray-700">
                 <span className="font-medium">{EVENT_LABELS[e.type] ?? e.type}</span>
                 {e.date && <span> · {e.date.raw}</span>}
-                {e.place && <span className="text-gray-500"> · {e.place.raw}</span>}
+                {e.place && (
+                  <span className="text-gray-500">
+                    {' '}
+                    · {e.place.raw} <PlaceResolveButton place={e.place} />
+                  </span>
+                )}
                 {e.sources.length > 0 && (
                   <div className="text-[11px] text-gray-400">
                     source: {e.sources.map((s) => s.page ?? s.raw).join('; ')}
