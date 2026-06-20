@@ -13,5 +13,10 @@ export type * from './types/index.js';
 // Never throws on malformed input; collects warnings instead.
 export { parseGedcom } from './gedcom/parse.js';
 
+// ---- Graph construction & traversal (TRD §5.3, §6) ---------------------
+export { buildGraph } from './graph/build.js';
+export { getAncestors, getDescendants } from './graph/traversal.js';
+export { computeGenerations } from './graph/generations.js';
+
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';
