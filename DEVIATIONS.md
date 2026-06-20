@@ -72,6 +72,28 @@ Each entry notes what the TRD said, what was decided, and why.
   generation distance to a common ancestor, not on how many parents are shared. Detecting
   half-relationships is beyond the documented English-kinship scope and is left for later.
 
+## Web app (Phase 7)
+
+- **Renderer adapter is pure.** `graphViewToFlow` (the only file that knows React Flow's
+  shapes) is a pure function unit-tested without the DOM; dagre layout is a separate pass.
+  Person-card display strings (lifespan, place) are computed in the node component from the
+  store rather than baked into the adapter, keeping the adapter free of the model.
+- **Spouse edges** are drawn but not fed to the dagre ranker (they connect same-generation
+  peers); only `parentOf` edges drive the generational tiers. Nodes use a single top
+  (target) / bottom (source) handle pair — enough for legible ancestry; per-side spouse
+  handles were not worth the complexity in Step One.
+- **Path highlighting expands the view.** When two people are compared, any person on a
+  resulting path that isn't already visible is added to the view so the full path renders.
+  Edge highlight keys are stored direction-agnostically (both orientations) and matched by
+  the adapter against whichever oriented edge exists.
+- **Node-budget behaviour.** Exceeding the 300-node budget on expand surfaces a notice but
+  does not block the expansion (TRD §10.4 mandates a warning; blocking would be more
+  disruptive than informative for a deliberate click). The initial ego network is hard-
+  bounded by the budget.
+- **Bundled sample.** A "Load sample" button imports `pedigree-collapse.ged` via Vite's
+  `?raw` so the app is verifiable without sourcing a file; web tests load fixtures the same
+  way (avoids Vite's `/@fs/` path prefix that breaks `import.meta.url`-based `fs` reads).
+
 ## Portability lint rule
 
 - Implemented with core ESLint rules (`no-restricted-imports` + `no-restricted-globals`)

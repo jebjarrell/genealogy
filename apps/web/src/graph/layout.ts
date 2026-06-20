@@ -1,0 +1,37 @@
+import dagre from '@dagrejs/dagre';
+import type { Edge } from '@xyflow/react';
+import type { PersonFlowNode } from './adapter.js';
+
+// Dagre layout (TRD §10.1, §13): rank by the parentOf edges so ancestors stack
+// into clean generational tiers above their descendants. Spouse edges are not
+// fed to the ranker (they connect same-generation peers); they are still drawn.
+
+export const NODE_WIDTH = 190;
+export const NODE_HEIGHT = 76;
+
+export function layout(nodes: PersonFlowNode[], edges: Edge[]): PersonFlowNode[] {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 90, marginx: 20, marginy: 20 });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const node of nodes) {
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  }
+  for (const edge of edges) {
+    const edgeType = (edge.data as { edgeType?: string } | undefined)?.edgeType;
+    if (edgeType === 'parentOf') g.setEdge(edge.source, edge.target);
+  }
+
+  dagre.layout(g);
+
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    // dagre gives center coordinates; React Flow positions by top-left corner.
+    return {
+      ...node,
+      position: pos
+        ? { x: pos.x - NODE_WIDTH / 2, y: pos.y - NODE_HEIGHT / 2 }
+        : node.position,
+    };
+  });
+}
