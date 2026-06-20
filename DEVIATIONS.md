@@ -51,6 +51,27 @@ Each entry notes what the TRD said, what was decided, and why.
   malformed structure; the adapter catches and converts to a `ParseWarning`, never
   re-throwing (TRD §2, §7.3).
 
+## Path enumeration & pedigree collapse (the centerpiece)
+
+- **Relationship-path semantics.** The TRD says `enumeratePaths` returns "every distinct
+  simple path … following the graph" but does not pin down what counts as a meaningful
+  path. Treating the ancestor DAG as undirected would generate zig-zag artifacts (up to one
+  parent, sideways via a shared child, back up) and explode combinatorially. Resolved by
+  defining a genealogical relationship path as **Λ-shaped**: a monotonic ascent (child →
+  parent) to an apex/common ancestor, then a monotonic descent (parent → child); once a
+  path turns downward it never turns back up. Only parent/child edges are traversed
+  (consanguineous paths); spouse edges are not. This yields exactly the meaningful distinct
+  paths — including the reconverging paths of pedigree collapse — and bounds the search.
+  Verified against `pedigree-collapse.ged`: exactly two paths to each collapse ancestor.
+- **Truncation flag (TRD §6 vs §7.3).** §6 types `enumeratePaths` as returning `Path[]`,
+  while §7.3 requires "a flag/warning that results were truncated." Resolved additively:
+  the public `enumeratePaths` keeps the `Path[]` signature; an internal
+  `enumerateRelationshipPaths` returns `{ paths, truncated }` (also exported), and
+  `CollapsePoint` carries an optional `truncated` field. No documented signature changed.
+- **Half-siblings** render as full siblings (`brother`/`sister`) — the §9 algorithm keys on
+  generation distance to a common ancestor, not on how many parents are shared. Detecting
+  half-relationships is beyond the documented English-kinship scope and is left for later.
+
 ## Portability lint rule
 
 - Implemented with core ESLint rules (`no-restricted-imports` + `no-restricted-globals`)

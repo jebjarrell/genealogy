@@ -31,5 +31,26 @@ export type { CollapsePoint, DetectCollapseOptions } from './graph/collapse.js';
 export { findCommonAncestors } from './graph/common-ancestors.js';
 export type { CommonAncestor } from './graph/common-ancestors.js';
 
+// ---- View construction (TRD §6, §10) -----------------------------------
+export { getEgoNetwork } from './graph/ego-network.js';
+export type { EgoNetworkOptions } from './graph/ego-network.js';
+export { expandPerson } from './graph/expand.js';
+export { pickDefaultFocalPerson } from './graph/focal.js';
+export { extractEventSequence } from './graph/event-sequence.js';
+export type { LocatedEvent } from './graph/event-sequence.js';
+
+// ---- Relationship description (TRD §9) ----------------------------------
+export {
+  describeRelationship,
+  describeAncestorByGenerations,
+  describeDescendantByGenerations,
+} from './relationship/describe.js';
+export {
+  ordinal,
+  ordinalWord,
+  removalWord,
+  greatPrefix,
+} from './relationship/ordinals.js';
+
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';
