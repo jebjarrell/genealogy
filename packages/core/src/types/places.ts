@@ -2,7 +2,11 @@
 // "Floyd, Kentucky, United States". Resolution to coordinates is OPTIONAL
 // and, in Step One, not performed during graph work (TRD §5.2, §8).
 
-export type PlaceResolutionSource = 'manual' | 'familysearch' | 'nominatim';
+export type PlaceResolutionSource =
+  | 'manual'
+  | 'familysearch'
+  | 'nominatim'
+  | 'photon';
 
 export interface ResolvedPlace {
   lat: number;

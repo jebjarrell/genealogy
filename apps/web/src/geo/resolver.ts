@@ -2,6 +2,7 @@ import type { Place, PlaceResolver, ResolvedPlace } from '@genealogy/core';
 import {
   CachingResolver,
   NominatimResolver,
+  PhotonResolver,
   StaticTableResolver,
   type StaticTableEntry,
 } from '@genealogy/geo';
@@ -72,7 +73,13 @@ export function createGeocoder(options: GeocoderOptions = {}): PlaceResolver {
     fetchImpl: options.fetchImpl,
     minIntervalMs: options.minIntervalMs ?? 1100,
   });
-  const chain = new CachingResolver(cache, [nominatim]);
+  // Photon (komoot) is CORS-friendly and needs no User-Agent, so it resolves
+  // from the browser even when the public Nominatim rate-limits or blocks us.
+  const photon = new PhotonResolver({
+    fetchImpl: options.fetchImpl,
+    minIntervalMs: options.minIntervalMs ?? 1100,
+  });
+  const chain = new CachingResolver(cache, [nominatim, photon]);
 
   return {
     async resolve(place: Place): Promise<ResolvedPlace | null> {

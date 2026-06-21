@@ -4,6 +4,7 @@
 export { StaticTableResolver } from './static-table.js';
 export type { StaticTableEntry } from './static-table.js';
 export { NominatimResolver } from './nominatim.js';
+export { PhotonResolver } from './photon.js';
 export { placeQueryCandidates } from './place-query.js';
 export { FamilySearchPlacesResolver } from './familysearch.js';
 export { CachingResolver } from './caching.js';

@@ -1,5 +1,5 @@
 import type { Place, PlaceResolver, ResolvedPlace } from '@genealogy/core';
-import { placeQueryCandidates } from './place-query.js';
+import { placeQueryCandidates, type QueryResult } from './place-query.js';
 
 export interface NominatimResolverOptions {
   /** Required by the Nominatim usage policy; identifies this application. */
@@ -55,17 +55,21 @@ export class NominatimResolver implements PlaceResolver {
   async resolve(place: Place): Promise<ResolvedPlace | null> {
     // Try cleaned, progressively coarser queries until one resolves; messy real
     // PLAC strings ("Fleming Co., KY, Kentucky, USA") rarely match verbatim.
+    // Coarsen on a genuine MISS (200 + no results); bail on a provider ERROR
+    // (HTTP/network) so the caller's fallback chain runs without wading through
+    // every candidate against an unavailable service.
     const candidates = placeQueryCandidates(place);
     if (candidates.length === 0) candidates.push(place.normalized);
     for (const query of candidates) {
-      const hit = await this.resolveQuery(query);
-      if (hit) return hit;
+      const r = await this.resolveQuery(query);
+      if (r.kind === 'hit') return r.place;
+      if (r.kind === 'error') return null;
     }
     return null;
   }
 
   /** Geocode a single free-text query string (one throttled request). */
-  private async resolveQuery(query: string): Promise<ResolvedPlace | null> {
+  private async resolveQuery(query: string): Promise<QueryResult> {
     try {
       await this.throttle();
 
@@ -79,23 +83,23 @@ export class NominatimResolver implements PlaceResolver {
       });
 
       if (!response.ok) {
-        return null;
+        return { kind: 'error' };
       }
 
       const body: unknown = await response.json();
       if (!Array.isArray(body) || body.length === 0) {
-        return null;
+        return { kind: 'miss' };
       }
 
       const first = body[0] as NominatimResult;
       if (first.lat === undefined || first.lon === undefined) {
-        return null;
+        return { kind: 'miss' };
       }
 
       const lat = Number.parseFloat(first.lat);
       const lon = Number.parseFloat(first.lon);
       if (Number.isNaN(lat) || Number.isNaN(lon)) {
-        return null;
+        return { kind: 'miss' };
       }
 
       const confidence =
@@ -106,15 +110,18 @@ export class NominatimResolver implements PlaceResolver {
           : DEFAULT_CONFIDENCE;
 
       return {
-        lat,
-        lon,
-        source: 'nominatim',
-        confidence,
-        resolvedName: first.display_name,
+        kind: 'hit',
+        place: {
+          lat,
+          lon,
+          source: 'nominatim',
+          confidence,
+          resolvedName: first.display_name,
+        },
       };
     } catch {
-      // Never throw out of resolve: a network failure means "unresolved".
-      return null;
+      // Never throw out of resolve: a network failure is a provider error.
+      return { kind: 'error' };
     }
   }
 
