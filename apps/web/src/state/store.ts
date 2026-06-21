@@ -4,6 +4,7 @@ import {
   detectPedigreeCollapse,
   enumerateRelationshipPaths,
   getEgoNetwork,
+  getSiblings,
   expandPerson,
   type CollapsePoint,
   type GenealogyModel,
@@ -23,6 +24,8 @@ export interface ViewOptions {
   descendantGenerations: number;
   includeSpouses: boolean;
   showMarriageEdges: boolean;
+  /** Add the siblings of everyone in view (off by default → direct ancestors). */
+  showSiblings: boolean;
 }
 
 const DEFAULT_VIEW_OPTIONS: ViewOptions = {
@@ -30,6 +33,7 @@ const DEFAULT_VIEW_OPTIONS: ViewOptions = {
   descendantGenerations: 0,
   includeSpouses: false,
   showMarriageEdges: false,
+  showSiblings: false,
 };
 export { DEFAULT_VIEW_OPTIONS };
 
@@ -121,7 +125,18 @@ function baseViewIds(
     includeSpouses: options.includeSpouses,
     nodeBudget: NODE_BUDGET,
   });
-  return new Set(ego.nodes.map((n) => n.person.id));
+  const ids = new Set(ego.nodes.map((n) => n.person.id));
+  // Optionally fan out to siblings of everyone in view (bounded by the budget).
+  if (options.showSiblings) {
+    for (const id of [...ids]) {
+      if (ids.size >= NODE_BUDGET) break;
+      for (const sib of getSiblings(graph, id)) {
+        if (ids.size >= NODE_BUDGET) break;
+        ids.add(sib);
+      }
+    }
+  }
+  return ids;
 }
 
 export const useStore = create<AppState>((set, get) => ({

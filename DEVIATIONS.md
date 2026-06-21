@@ -123,6 +123,41 @@ These were added after the owner reviewed the Step One viewer (see the approved 
   question is faithful round-trip (retain the raw `read-gedcom` tree and patch it, since the
   library has no writer) vs. lossy export from our model. Deferred to its own phase.
 
+## Phase-2 review round 1 — tree/map quick wins
+
+Added after the owner used the migration map on a real file (see the approved plan,
+"Round 1"). All localized to `apps/web` + small pure helpers in `@genealogy/core` and
+`@genealogy/geo`; the read-only invariant is preserved (no editing yet).
+
+- **Geocoding actually works on messy places now.** The map's "0 located events" and the
+  profile "locate" failures shared one cause: real PLAC strings like
+  `Fleming Co., KY, Kentucky, USA` don't match Nominatim verbatim. New pure
+  `placeQueryCandidates` (`@genealogy/geo`) expands abbreviations (`Co.`→`County`), maps US
+  state postal codes & country aliases (`KY`→`Kentucky`, `USA`→`United States`), drops the
+  duplicated-state artifact, and emits progressively coarser fallbacks (full → drop
+  most-specific → … → country). `NominatimResolver` tries each until a hit; an already-clean
+  place still queries exactly as before (first candidate == joined hierarchy), so existing
+  tests hold. The stale "Step One resolver is a no-op" label was removed — the resolver has
+  been the real Nominatim chain since the map shipped.
+- **Map default is now ALL ancestors' migration**, not a single line. New pure
+  `allAncestorStops` aggregates `extractEventSequence` over `getAncestors(focal)`, deduping
+  **shared events** (a marriage reachable from both spouses) by event id so each place plots
+  once. Focusing a single line is still available ("focus a line…"). Bulk first-load is
+  rate-limited (~1.1s/place) then cached forever.
+- **Leaflet now re-measures on resize.** A `ResizeHandler` (ResizeObserver on the map
+  container + window resize) calls `map.invalidateSize()`, fixing the stale canvas / blank
+  gap when a side panel is collapsed.
+- **Pedigree expansion is ancestors-only.** Double-click and the card **+** now expand
+  `'ancestors'` (parents), not `'all'` — killing the children/spouse noise the owner saw.
+  This also satisfies "extend ancestry from a given ancestor": **+** works on any node.
+  A new **Siblings** toggle (core `getSiblings` = parents' children, incl. half-siblings)
+  fans the view out to collaterals on demand; bounded by the node budget.
+- **External research links (no API).** Pure `apps/web/src/research/links.ts` builds
+  pre-filled searches: Ancestry (its `name=Given_Surname`, `birth=YEAR_Place-Hyphenated`
+  packing), FamilySearch record search (`q.*` params, ±2yr date window). DAR's GRS search is
+  a POST form that can't be deep-linked, so the DAR link is a site-scoped web search
+  (`site:services.dar.org <name>`) — reliable prefill without guessing their form params.
+
 ## Portability lint rule
 
 - Implemented with core ESLint rules (`no-restricted-imports` + `no-restricted-globals`)

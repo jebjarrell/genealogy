@@ -2,6 +2,12 @@ import { describeRelationship } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
+import {
+  researchFacts,
+  ancestrySearchUrl,
+  familySearchRecordUrl,
+  darSearchUrl,
+} from '../research/links.js';
 
 const EVENT_LABELS: Record<string, string> = {
   birth: 'Born',
@@ -50,6 +56,56 @@ function RelationshipList({ title, ids }: { title: string; ids: string[] }) {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+// Deep-links into external sites (Ancestry, FamilySearch, DAR), pre-filled from
+// the person's known facts. No API — each opens a search in a new tab.
+function ResearchLinks({ personId }: { personId: string }) {
+  const model = useStore((s) => s.model);
+  const graph = useStore((s) => s.graph);
+  if (!model || !graph) return null;
+  const facts = researchFacts(model, graph, personId);
+  if (!facts || (!facts.given && !facts.surname && !facts.fullName)) return null;
+
+  const links: { label: string; href: string; title: string }[] = [
+    {
+      label: 'Ancestry',
+      href: ancestrySearchUrl(facts),
+      title: 'Search Ancestry.com with this person’s details',
+    },
+    {
+      label: 'FamilySearch',
+      href: familySearchRecordUrl(facts),
+      title: 'Search FamilySearch records with this person’s details',
+    },
+    {
+      label: 'DAR',
+      href: darSearchUrl(),
+      title: 'Open the DAR Genealogical Research System ancestor search',
+    },
+  ];
+
+  return (
+    <div className="mt-1">
+      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Search on
+      </div>
+      <div className="mt-1 flex flex-wrap gap-1">
+        {links.map((l) => (
+          <a
+            key={l.label}
+            href={l.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={l.title}
+            className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+          >
+            {l.label} ↗
+          </a>
+        ))}
+      </div>
     </div>
   );
 }
@@ -117,6 +173,8 @@ export function DetailPanel() {
           + Descendants
         </button>
       </div>
+
+      <ResearchLinks personId={person.id} />
 
       {events.length > 0 && (
         <div className="mt-2">

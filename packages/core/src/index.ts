@@ -15,7 +15,7 @@ export { parseGedcom } from './gedcom/parse.js';
 
 // ---- Graph construction & traversal (TRD §5.3, §6) ---------------------
 export { buildGraph } from './graph/build.js';
-export { getAncestors, getDescendants } from './graph/traversal.js';
+export { getAncestors, getDescendants, getSiblings } from './graph/traversal.js';
 export { computeGenerations } from './graph/generations.js';
 
 // ---- Paths, collapse & common ancestors (centerpiece; TRD §6, §7.3) ----

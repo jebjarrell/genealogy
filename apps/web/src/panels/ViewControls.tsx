@@ -10,7 +10,7 @@ export function ViewControls() {
   const highlight = useStore((s) => s.highlight);
   const clearHighlight = useStore((s) => s.clearHighlight);
 
-  const toggle = (key: 'includeSpouses' | 'showMarriageEdges') =>
+  const toggle = (key: 'includeSpouses' | 'showMarriageEdges' | 'showSiblings') =>
     setViewOptions({ [key]: !viewOptions[key] });
 
   const Chip = ({
@@ -48,6 +48,13 @@ export function ViewControls() {
         title="Include spouses of people in view (e.g. step-relatives)"
       >
         Spouses
+      </Chip>
+      <Chip
+        active={viewOptions.showSiblings}
+        onClick={() => toggle('showSiblings')}
+        title="Include siblings of the people in view"
+      >
+        Siblings
       </Chip>
       <Chip
         active={viewOptions.descendantGenerations > 0}

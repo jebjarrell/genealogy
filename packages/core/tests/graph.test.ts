@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parseGedcom } from '../src/gedcom/parse.js';
 import { buildGraph } from '../src/graph/build.js';
-import { getAncestors, getDescendants } from '../src/graph/traversal.js';
+import { getAncestors, getDescendants, getSiblings } from '../src/graph/traversal.js';
 import { computeGenerations } from '../src/graph/generations.js';
 
 function model(name: string) {
@@ -65,6 +65,16 @@ describe('traversal — multiple-marriages.ged', () => {
   });
   it('respects a generations cap', () => {
     expect(getAncestors(g, 'I4', 1).sort()).toEqual(['I1', 'I2']);
+  });
+
+  it('getSiblings includes full and half siblings, excluding self', () => {
+    // I4 & I5 are full siblings (F1); I6 shares only father I1 (F2).
+    expect(getSiblings(g, 'I4').sort()).toEqual(['I5', 'I6']);
+    expect(getSiblings(g, 'I6').sort()).toEqual(['I4', 'I5']);
+  });
+
+  it('getSiblings is empty for a person with no recorded parents', () => {
+    expect(getSiblings(g, 'I1')).toEqual([]);
   });
 });
 

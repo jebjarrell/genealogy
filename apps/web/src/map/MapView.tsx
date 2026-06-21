@@ -15,7 +15,12 @@ import {
 } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { primaryName } from '../graph/personDisplay.js';
-import { lineageStops, uniquePlaces, type LineageStop } from './lineage.js';
+import {
+  allAncestorStops,
+  lineageStops,
+  uniquePlaces,
+  type LineageStop,
+} from './lineage.js';
 import { useGeocode } from './useGeocode.js';
 import { TimeSlider } from './TimeSlider.js';
 
@@ -45,18 +50,42 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
   return null;
 }
 
+// Leaflet caches the container size at init; when a side panel toggles, the
+// container changes size but the map keeps its stale canvas (the "blank gap" the
+// owner saw). Re-measure on any container/window resize.
+function ResizeHandler() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(el);
+    const onResize = () => map.invalidateSize();
+    window.addEventListener('resize', onResize);
+    const t = setTimeout(() => map.invalidateSize(), 0);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onResize);
+      clearTimeout(t);
+    };
+  }, [map]);
+  return null;
+}
+
 // Color a stop from blue (earliest) to red (latest) so direction is readable.
 function rampColor(index: number, total: number): string {
   const frac = total <= 1 ? 0 : index / (total - 1);
   return `hsl(${Math.round(220 - 220 * frac)}, 80%, 45%)`;
 }
 
-function AncestorSelector() {
+// Selects what the map shows: ALL ancestors' migration by default, or one
+// chosen ancestral line when the user focuses it.
+function LineageControl() {
   const model = useStore((s) => s.model)!;
   const graph = useStore((s) => s.graph)!;
   const focalPersonId = useStore((s) => s.focalPersonId)!;
   const mapAncestorId = useStore((s) => s.mapAncestorId);
   const setMapAncestor = useStore((s) => s.setMapAncestor);
+  const [picking, setPicking] = useState(false);
   const [query, setQuery] = useState('');
 
   const ancestors = useMemo(() => {
@@ -69,11 +98,12 @@ function AncestorSelector() {
       .slice(0, 40);
   }, [graph, model, focalPersonId, query]);
 
+  // Focused on a single line.
   if (mapAncestorId) {
     const anc = model.persons.get(mapAncestorId);
     return (
       <div className="text-sm">
-        <span className="text-gray-500">Lineage: </span>
+        <span className="text-gray-500">Line: </span>
         <span className="font-semibold">
           {model.persons.get(focalPersonId)?.names[0]?.full ?? 'focal'}
         </span>
@@ -86,45 +116,73 @@ function AncestorSelector() {
         )}
         <button
           className="ml-2 text-xs text-blue-700 hover:underline"
-          onClick={() => setMapAncestor(null)}
+          onClick={() => {
+            setMapAncestor(null);
+            setPicking(false);
+          }}
         >
-          change
+          show all ancestors
         </button>
       </div>
     );
   }
 
-  return (
-    <div>
-      <div className="mb-1 text-sm font-semibold text-gray-700">
-        Pick an ancestor to map the line to:
+  // Picking a line to focus.
+  if (picking) {
+    return (
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-sm font-semibold text-gray-700">Focus a line to:</span>
+          <button
+            className="text-xs text-blue-700 hover:underline"
+            onClick={() => setPicking(false)}
+          >
+            cancel
+          </button>
+        </div>
+        <input
+          autoFocus
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search ancestors…"
+          className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+        />
+        <ul className="mt-1 max-h-48 overflow-y-auto">
+          {ancestors.map((p) => (
+            <li key={p.id}>
+              <button
+                className="w-full truncate rounded px-2 py-1 text-left text-sm text-blue-700 hover:bg-blue-50"
+                onClick={() => {
+                  setMapAncestor(p.id);
+                  setPicking(false);
+                }}
+              >
+                {primaryName(p)}
+                <span className="ml-1 text-xs text-gray-400">
+                  ({describeRelationship(graph, model, focalPersonId, p.id)})
+                </span>
+              </button>
+            </li>
+          ))}
+          {ancestors.length === 0 && (
+            <li className="px-2 py-2 text-sm text-gray-400">No ancestors found.</li>
+          )}
+        </ul>
       </div>
-      <input
-        autoFocus
-        type="search"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search ancestors…"
-        className="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
-      />
-      <ul className="mt-1 max-h-48 overflow-y-auto">
-        {ancestors.map((p) => (
-          <li key={p.id}>
-            <button
-              className="w-full truncate rounded px-2 py-1 text-left text-sm text-blue-700 hover:bg-blue-50"
-              onClick={() => setMapAncestor(p.id)}
-            >
-              {primaryName(p)}
-              <span className="ml-1 text-xs text-gray-400">
-                ({describeRelationship(graph, model, focalPersonId, p.id)})
-              </span>
-            </button>
-          </li>
-        ))}
-        {ancestors.length === 0 && (
-          <li className="px-2 py-2 text-sm text-gray-400">No ancestors found.</li>
-        )}
-      </ul>
+    );
+  }
+
+  // Default: all ancestors.
+  return (
+    <div className="flex items-center justify-between gap-2 text-sm">
+      <span className="font-semibold text-gray-700">All ancestors’ migration</span>
+      <button
+        className="shrink-0 text-xs text-blue-700 hover:underline"
+        onClick={() => setPicking(true)}
+      >
+        focus a line…
+      </button>
     </div>
   );
 }
@@ -136,8 +194,10 @@ export function MapView() {
   const mapAncestorId = useStore((s) => s.mapAncestorId);
 
   const stops: LineageStop[] = useMemo(() => {
-    if (!model || !graph || !focalPersonId || !mapAncestorId) return [];
-    return lineageStops(model, graph, focalPersonId, mapAncestorId);
+    if (!model || !graph || !focalPersonId) return [];
+    return mapAncestorId
+      ? lineageStops(model, graph, focalPersonId, mapAncestorId)
+      : allAncestorStops(model, graph, focalPersonId);
   }, [model, graph, focalPersonId, mapAncestorId]);
 
   const places = useMemo(() => uniquePlaces(stops), [stops]);
@@ -220,32 +280,31 @@ export function MapView() {
           </CircleMarker>
         ))}
         <FitBounds positions={positions} />
+        <ResizeHandler />
       </MapContainer>
 
       <div className="absolute left-3 top-3 z-[1000] w-80 max-w-[90%] rounded-lg border border-gray-200 bg-white/95 p-3 shadow">
-        <AncestorSelector />
-        {mapAncestorId && (
-          <div className="mt-2 space-y-1">
-            {minYear !== undefined && maxYear !== undefined && (
-              <TimeSlider
-                min={minYear}
-                max={maxYear}
-                value={currentYear ?? maxYear}
-                onChange={setYear}
-              />
+        <LineageControl />
+        <div className="mt-2 space-y-1">
+          {minYear !== undefined && maxYear !== undefined && minYear !== maxYear && (
+            <TimeSlider
+              min={minYear}
+              max={maxYear}
+              value={currentYear ?? maxYear}
+              onChange={setYear}
+            />
+          )}
+          <div className="text-[11px] text-gray-500">
+            {resolved.length} located event(s)
+            {pending > 0 && ` · geocoding ${pending}…`}
+            {stops.length > 0 && resolved.length === 0 && pending === 0 && (
+              <span className="text-amber-700"> · no places could be geocoded</span>
             )}
-            <div className="text-[11px] text-gray-500">
-              {resolved.length} located event(s)
-              {pending > 0 && ` · geocoding ${pending}…`}
-              {stops.length > 0 && resolved.length === 0 && pending === 0 && (
-                <span className="text-amber-700"> · no places could be geocoded</span>
-              )}
-            </div>
-            <div className="text-[10px] text-gray-400">
-              Place names are sent to OpenStreetMap for geocoding and cached locally.
-            </div>
           </div>
-        )}
+          <div className="text-[10px] text-gray-400">
+            Place names are sent to OpenStreetMap for geocoding and cached locally.
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -77,6 +77,20 @@ describe('app store — ego network & collapse', () => {
     useStore.getState().setViewOptions({ includeSpouses: false });
     expect(ids()).not.toContain('I3');
   });
+
+  it('Siblings toggle reveals siblings (full & half) of people in view', () => {
+    // Focal Mary (@I4@): her siblings are Edward (@I5@, full) and Elizabeth
+    // (@I6@, half via father). Neither is a direct ancestor → hidden by default.
+    load(marriagesGed);
+    useStore.getState().setFocal('I4');
+    expect(ids()).not.toContain('I5');
+    expect(ids()).not.toContain('I6');
+    useStore.getState().setViewOptions({ showSiblings: true });
+    expect(ids()).toContain('I5');
+    expect(ids()).toContain('I6');
+    useStore.getState().setViewOptions({ showSiblings: false });
+    expect(ids()).not.toContain('I5');
+  });
 });
 
 describe('app store — selection, deselection, reset', () => {

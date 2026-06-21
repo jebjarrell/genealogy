@@ -149,6 +149,33 @@ describe('NominatimResolver', () => {
     expect(capturedUrl).toContain('Floyd%2C+Kentucky%2C+United+States');
   });
 
+  it('coarsens the query when a precise locality misses', async () => {
+    const queries: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const q = new URL(String(url)).searchParams.get('q') ?? '';
+      queries.push(q);
+      // Miss on the county; hit only once it falls back to the state.
+      if (q.startsWith('Fleming County')) return jsonResponse([]);
+      return jsonResponse([{ lat: '37.8', lon: '-83.6', display_name: q }]);
+    });
+
+    const resolver = new NominatimResolver({
+      userAgent: 'genealogy-test/1.0',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+
+    const result = await resolver.resolve({
+      raw: 'Fleming Co., KY, Kentucky, USA',
+      normalized: 'fleming co., ky, kentucky, usa',
+      parts: ['Fleming Co.', 'KY', 'Kentucky', 'USA'],
+    });
+
+    expect(result?.resolvedName).toBe('Kentucky, United States');
+    expect(queries[0]).toBe('Fleming County, Kentucky, United States');
+    expect(queries[1]).toBe('Kentucky, United States');
+  });
+
   it('enforces the minimum interval between requests', async () => {
     const calls: number[] = [];
     const fetchImpl = vi.fn(async () => {

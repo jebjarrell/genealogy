@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { Place } from '@genealogy/core';
 import { placeResolver } from '../geo/resolver.js';
 
-// Exercises the injected PlaceResolver seam (TRD §8.3). In Step One the no-op
-// resolver returns null, so this reports "no coordinates" — but it proves the
-// app injects and calls a resolver behind the interface, ready for Step Two.
+// Geocode a single place on demand via the injected PlaceResolver (TRD §8.3):
+// a persistent local cache → OpenStreetMap Nominatim. Place names (not the file)
+// are sent to OSM and cached; messy strings are cleaned/coarsened before lookup.
 export function PlaceResolveButton({ place }: { place: Place }) {
   const [state, setState] = useState<'idle' | 'loading' | 'done'>('idle');
   const [text, setText] = useState('');
@@ -15,7 +15,7 @@ export function PlaceResolveButton({ place }: { place: Place }) {
     setText(
       result
         ? `${result.lat.toFixed(4)}, ${result.lon.toFixed(4)} (${result.source})`
-        : 'no coordinates (Step One resolver is a no-op)',
+        : "couldn't geocode this place",
     );
     setState('done');
   }
