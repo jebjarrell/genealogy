@@ -82,8 +82,8 @@ function ResearchLinks({ personId }: { personId: string }) {
     },
     {
       label: 'DAR',
-      href: darSearchUrl(facts),
-      title: 'Web search for this person in the DAR Genealogical Research System',
+      href: darSearchUrl(),
+      title: 'Open the DAR Genealogical Research System ancestor search',
     },
   ];
 

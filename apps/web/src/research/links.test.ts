@@ -69,11 +69,9 @@ describe('familySearchRecordUrl', () => {
 });
 
 describe('darSearchUrl', () => {
-  it('builds a site-scoped web search for the full name', () => {
-    const f = researchFacts(model, graph, 'I3')!;
-    const url = darSearchUrl(f);
-    expect(url).toContain('site%3Aservices.dar.org');
-    expect(url).toContain('William');
-    expect(url).toContain('Smith');
+  it('links to the DAR GRS ancestor search page', () => {
+    expect(darSearchUrl()).toBe(
+      'https://services.dar.org/Public/DAR_Research/search/?Tab_ID=1',
+    );
   });
 });

@@ -177,13 +177,11 @@ export function familySearchRecordUrl(f: ResearchFacts): string {
 }
 
 // --- DAR (Daughters of the American Revolution) -------------------------
-// The DAR Genealogical Research System search is a POST form, so its query
-// can't be deep-linked directly. A site-scoped web search is the reliable way
-// to surface a named ancestor's DAR record(s).
+// The DAR Genealogical Research System (GRS) ancestor search is a POST form, so
+// it can't be deep-linked per person — link straight to the GRS search page.
 
-export function darSearchUrl(f: ResearchFacts): string {
-  const name = f.fullName || `${f.given} ${f.surname}`.trim();
-  const p = new URLSearchParams();
-  p.set('q', `site:services.dar.org ${name}`.trim());
-  return `https://www.google.com/search?${p.toString()}`;
+const DAR_GRS_SEARCH_URL = 'https://services.dar.org/Public/DAR_Research/search/?Tab_ID=1';
+
+export function darSearchUrl(): string {
+  return DAR_GRS_SEARCH_URL;
 }
