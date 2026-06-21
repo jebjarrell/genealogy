@@ -1,4 +1,5 @@
 import type { Place, PlaceResolver, ResolvedPlace } from '@genealogy/core';
+import { placeQueryCandidates } from './place-query.js';
 
 export interface NominatimResolverOptions {
   /** Required by the Nominatim usage policy; identifies this application. */
@@ -52,11 +53,24 @@ export class NominatimResolver implements PlaceResolver {
   }
 
   async resolve(place: Place): Promise<ResolvedPlace | null> {
+    // Try cleaned, progressively coarser queries until one resolves; messy real
+    // PLAC strings ("Fleming Co., KY, Kentucky, USA") rarely match verbatim.
+    const candidates = placeQueryCandidates(place);
+    if (candidates.length === 0) candidates.push(place.normalized);
+    for (const query of candidates) {
+      const hit = await this.resolveQuery(query);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  /** Geocode a single free-text query string (one throttled request). */
+  private async resolveQuery(query: string): Promise<ResolvedPlace | null> {
     try {
       await this.throttle();
 
       const url = new URL(this.baseUrl);
-      url.searchParams.set('q', this.queryFor(place));
+      url.searchParams.set('q', query);
       url.searchParams.set('format', 'jsonv2');
       url.searchParams.set('limit', '1');
 
@@ -102,18 +116,6 @@ export class NominatimResolver implements PlaceResolver {
       // Never throw out of resolve: a network failure means "unresolved".
       return null;
     }
-  }
-
-  /** Prefer the verbatim PLAC string; fall back to a joined hierarchy. */
-  private queryFor(place: Place): string {
-    const raw = place.raw.trim();
-    if (raw.length > 0) {
-      return raw;
-    }
-    if (place.parts && place.parts.length > 0) {
-      return place.parts.join(', ');
-    }
-    return place.normalized;
   }
 
   /**
