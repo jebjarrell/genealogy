@@ -56,10 +56,10 @@ export function PersonNode({ data }: NodeProps<PersonFlowNode>) {
       {hasUnexpandedNeighbors && (
         <button
           className="absolute -bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-gray-300 bg-white px-1.5 text-xs font-bold text-gray-600 shadow hover:bg-gray-100"
-          title="Expand neighbours"
+          title="Extend pedigree — show this person's parents"
           onClick={(e) => {
             e.stopPropagation();
-            expand(person.id, 'all');
+            expand(person.id, 'ancestors');
           }}
         >
           +

@@ -39,7 +39,9 @@ export function GraphCanvas() {
   }, [view, selectedIds, highlight, showMarriageEdges]);
 
   const onNodeClick: NodeMouseHandler = (_e, node) => selectPerson(node.id);
-  const onNodeDoubleClick: NodeMouseHandler = (_e, node) => expand(node.id, 'all');
+  // Double-click extends the pedigree (parents only) — keeps the graph to direct
+  // ancestors. Descendants/spouses are opt-in via the detail panel and toolbar.
+  const onNodeDoubleClick: NodeMouseHandler = (_e, node) => expand(node.id, 'ancestors');
 
   return (
     <ReactFlow
