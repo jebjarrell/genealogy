@@ -78,8 +78,9 @@ person, and renders the ego network. Sample fixtures live in
   is remembered per file and changeable anytime from the header.
 - The graph renders **direct ancestors only** by default. Use the toolbar to toggle
   **Spouses**, **Siblings**, **Descendants**, and **Marriage links** back on.
-- **Click** a person to open the detail panel (names, events, places, sources — each with
-  the raw source string); click again to deselect.
+- **Click** a person to open the detail panel. It leads with a **bio sketch** (birth, death,
+  spouse(s), # children, military service + war era), with the full events, relationships,
+  and source citations kept below — each with its raw source string. Click again to deselect.
 - **Double-click** a person (or the **+** on a card) to **extend the pedigree** one more
   generation back — parents only, so the graph stays to direct ancestors. (Use the detail
   panel's **+ Descendants** / the **Siblings** toggle to bring in collaterals.)
@@ -92,9 +93,13 @@ person, and renders the ego network. Sample fixtures live in
   path highlighting on selection.
 - **Map** (the migration view): switch to **Map** to see **all your ancestors' migration**
   over time by default, or **focus a single line** (focal → a chosen ancestor); scrub the
-  year slider to animate it. Geocoding uses OpenStreetMap Nominatim — **place names** (not
-  your file) are sent to OSM and cached locally; messy strings (e.g. `Fleming Co., KY,
-  Kentucky, USA`) are cleaned and coarsened so historical places still resolve.
+  year slider to animate it. Geocoding tries OpenStreetMap Nominatim first, then falls back
+  to **Photon** (komoot) when Nominatim is rate-limited or blocked in the browser — **place
+  names** (not your file) are sent to the geocoder and cached locally; messy strings (e.g.
+  `Fleming Co., KY, Kentucky, USA`) are cleaned and coarsened so historical places resolve.
+- **Family** (the analytics view): switch to **Family** for statistics across your direct
+  ancestors — count & generation depth, longevity, most common birthplaces, average family
+  size, and military service by war. Computed entirely from your file; no LLM.
 - **Collapsible panels**: collapse the side panels to give the graph/map room.
 - **Data notes**: parse warnings and any path-enumeration truncation are surfaced in a
   dismissible panel — a malformed file still produces a usable graph.
