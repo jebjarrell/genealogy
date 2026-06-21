@@ -7,16 +7,52 @@ import { SearchPanel } from './panels/SearchPanel.js';
 import { CollapseReport } from './panels/CollapseReport.js';
 import { PathsPanel } from './panels/PathsPanel.js';
 import { DataNotes } from './panels/DataNotes.js';
+import { ViewControls } from './panels/ViewControls.js';
+import { FocalPicker } from './panels/FocalPicker.js';
 
 type LeftTab = 'search' | 'collapse';
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** Boolean UI state persisted to localStorage so panel layout survives reloads. */
+function usePersisted(key: string, initial: boolean) {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored === null ? initial : stored === '1';
+    } catch {
+      return initial;
+    }
+  });
+  const set = (next: boolean) => {
+    setValue(next);
+    try {
+      localStorage.setItem(key, next ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  };
+  return [value, set] as const;
+}
+
+function CollapsibleSection({
+  title,
+  storageKey,
+  children,
+}: {
+  title: string;
+  storageKey: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = usePersisted(storageKey, true);
   return (
     <div className="border-b border-gray-200">
-      <div className="bg-gray-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-gray-500">
+      <button
+        className="flex w-full items-center justify-between bg-gray-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-gray-500 hover:bg-gray-100"
+        onClick={() => setOpen(!open)}
+      >
         {title}
-      </div>
-      {children}
+        <span>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && children}
     </div>
   );
 }
@@ -24,11 +60,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function App() {
   const model = useStore((s) => s.model);
   const fileName = useStore((s) => s.fileName);
+  const openFocalPicker = useStore((s) => s.openFocalPicker);
   const focalName = useStore((s) => {
     if (!s.model || !s.focalPersonId) return null;
     return s.model.persons.get(s.focalPersonId)?.names[0]?.full ?? s.focalPersonId;
   });
   const [leftTab, setLeftTab] = useState<LeftTab>('collapse');
+  const [leftOpen, setLeftOpen] = usePersisted('ui:leftOpen', true);
+  const [rightOpen, setRightOpen] = usePersisted('ui:rightOpen', true);
 
   return (
     <div className="flex h-full flex-col bg-gray-100 text-gray-900">
@@ -38,7 +77,18 @@ export function App() {
           {fileName && (
             <div className="text-xs text-gray-500">
               {fileName}
-              {focalName && <> · focal: {focalName}</>}
+              {focalName && (
+                <>
+                  {' · focal: '}
+                  <button
+                    className="font-medium text-blue-700 hover:underline"
+                    onClick={openFocalPicker}
+                    title="Change focal person"
+                  >
+                    {focalName} ✎
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -56,39 +106,77 @@ export function App() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          <aside className="flex w-72 flex-col overflow-y-auto border-r border-gray-300 bg-white">
-            <div className="flex border-b border-gray-200 text-sm">
-              <button
-                className={`flex-1 px-2 py-1.5 ${leftTab === 'collapse' ? 'bg-amber-100 font-semibold' : 'hover:bg-gray-50'}`}
-                onClick={() => setLeftTab('collapse')}
-              >
-                Pedigree collapse
-              </button>
-              <button
-                className={`flex-1 px-2 py-1.5 ${leftTab === 'search' ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}
-                onClick={() => setLeftTab('search')}
-              >
-                Search
-              </button>
-            </div>
-            {leftTab === 'collapse' ? <CollapseReport /> : <SearchPanel />}
-          </aside>
+          {leftOpen ? (
+            <aside className="flex w-72 flex-col overflow-y-auto border-r border-gray-300 bg-white">
+              <div className="flex items-stretch border-b border-gray-200 text-sm">
+                <button
+                  className={`flex-1 px-2 py-1.5 ${leftTab === 'collapse' ? 'bg-amber-100 font-semibold' : 'hover:bg-gray-50'}`}
+                  onClick={() => setLeftTab('collapse')}
+                >
+                  Pedigree collapse
+                </button>
+                <button
+                  className={`flex-1 px-2 py-1.5 ${leftTab === 'search' ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}
+                  onClick={() => setLeftTab('search')}
+                >
+                  Search
+                </button>
+                <button
+                  className="px-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                  title="Collapse panel"
+                  onClick={() => setLeftOpen(false)}
+                >
+                  ⟨
+                </button>
+              </div>
+              {leftTab === 'collapse' ? <CollapseReport /> : <SearchPanel />}
+            </aside>
+          ) : (
+            <button
+              className="border-r border-gray-300 bg-white px-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              title="Expand left panel"
+              onClick={() => setLeftOpen(true)}
+            >
+              ⟩
+            </button>
+          )}
 
           <main className="relative min-w-0 flex-1">
+            <ViewControls />
             <GraphCanvas />
             <DataNotes />
           </main>
 
-          <aside className="flex w-80 flex-col overflow-y-auto border-l border-gray-300 bg-white">
-            <Section title="Detail">
-              <DetailPanel />
-            </Section>
-            <Section title="Relationship">
-              <PathsPanel />
-            </Section>
-          </aside>
+          {rightOpen ? (
+            <aside className="flex w-80 flex-col overflow-y-auto border-l border-gray-300 bg-white">
+              <button
+                className="flex items-center justify-between border-b border-gray-200 px-3 py-1 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                title="Collapse panel"
+                onClick={() => setRightOpen(false)}
+              >
+                <span className="font-bold uppercase tracking-wide">Panels</span>
+                <span>⟩</span>
+              </button>
+              <CollapsibleSection title="Detail" storageKey="ui:detailOpen">
+                <DetailPanel />
+              </CollapsibleSection>
+              <CollapsibleSection title="Relationship" storageKey="ui:relOpen">
+                <PathsPanel />
+              </CollapsibleSection>
+            </aside>
+          ) : (
+            <button
+              className="border-l border-gray-300 bg-white px-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              title="Expand right panel"
+              onClick={() => setRightOpen(true)}
+            >
+              ⟨
+            </button>
+          )}
         </div>
       )}
+
+      <FocalPicker />
     </div>
   );
 }

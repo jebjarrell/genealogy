@@ -13,6 +13,7 @@ export function PathsPanel() {
   const showRelationship = useStore((s) => s.showRelationship);
   const clearHighlight = useStore((s) => s.clearHighlight);
   const clearSelection = useStore((s) => s.clearSelection);
+  const deselectPerson = useStore((s) => s.deselectPerson);
 
   if (!model || !graph) return null;
   const nameOf = (id: string) => {
@@ -22,18 +23,42 @@ export function PathsPanel() {
 
   return (
     <div className="space-y-2 p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-        Relationship paths
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+          Relationship paths
+        </span>
+        {selectedIds.length > 0 && (
+          <button
+            className="text-[11px] text-blue-700 hover:underline"
+            onClick={() => {
+              clearSelection();
+              clearHighlight();
+            }}
+          >
+            clear selection
+          </button>
+        )}
       </div>
 
-      <div className="text-sm text-gray-700">
+      <div className="flex flex-wrap gap-1">
         {selectedIds.length === 0 && (
-          <span className="text-gray-400">Click two people to compare them.</span>
+          <span className="text-sm text-gray-400">
+            Click up to two people to compare them.
+          </span>
         )}
-        {selectedIds.map((id, i) => (
-          <span key={id}>
-            {i > 0 && <span className="text-gray-400"> ↔ </span>}
-            <span className="font-medium">{nameOf(id)}</span>
+        {selectedIds.map((id) => (
+          <span
+            key={id}
+            className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs text-indigo-800"
+          >
+            {nameOf(id)}
+            <button
+              className="font-bold text-indigo-500 hover:text-indigo-800"
+              title="Deselect"
+              onClick={() => deselectPerson(id)}
+            >
+              ✕
+            </button>
           </span>
         ))}
       </div>

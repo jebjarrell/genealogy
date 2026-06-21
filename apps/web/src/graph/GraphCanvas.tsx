@@ -18,19 +18,25 @@ export function GraphCanvas() {
   const view = useStore((s) => s.view);
   const selectedIds = useStore((s) => s.selectedIds);
   const highlight = useStore((s) => s.highlight);
+  const showMarriageEdges = useStore((s) => s.viewOptions.showMarriageEdges);
   const selectPerson = useStore((s) => s.selectPerson);
   const expand = useStore((s) => s.expand);
 
   const { nodes, edges } = useMemo(() => {
     if (!view) return { nodes: [] as PersonFlowNode[], edges: [] };
-    const flow = graphViewToFlow(view, {
+    // Marriage (spouseOf) edges are display-only clutter; hide unless toggled on.
+    // They never drive layout (dagre ranks on parentOf), so dropping them is safe.
+    const sourceView = showMarriageEdges
+      ? view
+      : { ...view, edges: view.edges.filter((e) => e.type !== 'spouseOf') };
+    const flow = graphViewToFlow(sourceView, {
       selectedIds: new Set(selectedIds),
       highlightedNodeIds: highlight?.nodeIds,
       highlightedEdgeKeys: highlight?.edgeKeys,
       dimUnhighlighted: highlight !== null,
     });
     return { nodes: layout(flow.nodes, flow.edges), edges: flow.edges };
-  }, [view, selectedIds, highlight]);
+  }, [view, selectedIds, highlight, showMarriageEdges]);
 
   const onNodeClick: NodeMouseHandler = (_e, node) => selectPerson(node.id);
   const onNodeDoubleClick: NodeMouseHandler = (_e, node) => expand(node.id, 'all');

@@ -5,7 +5,6 @@ import {
   enumerateRelationshipPaths,
   getEgoNetwork,
   expandPerson,
-  pickDefaultFocalPerson,
   type CollapsePoint,
   type GenealogyModel,
   type Graph,
@@ -18,6 +17,22 @@ import { buildView, focalGenerations, pathsToHighlight } from './viewModel.js';
 
 export const NODE_BUDGET = 300;
 
+/** Per-session display options for the ego network. Defaults = direct ancestors. */
+export interface ViewOptions {
+  ancestorGenerations: number;
+  descendantGenerations: number;
+  includeSpouses: boolean;
+  showMarriageEdges: boolean;
+}
+
+const DEFAULT_VIEW_OPTIONS: ViewOptions = {
+  ancestorGenerations: 4,
+  descendantGenerations: 0,
+  includeSpouses: false,
+  showMarriageEdges: false,
+};
+export { DEFAULT_VIEW_OPTIONS };
+
 export interface Highlight {
   fromId: string;
   toId: string;
@@ -25,6 +40,24 @@ export interface Highlight {
   truncated: boolean;
   nodeIds: Set<string>;
   edgeKeys: Set<string>;
+}
+
+// Remember the chosen focal person per file (web-only convenience).
+const rememberKey = (fileName: string) => `genealogy:focal:${fileName}`;
+function rememberFocal(fileName: string | null, id: string): void {
+  if (!fileName) return;
+  try {
+    localStorage.setItem(rememberKey(fileName), id);
+  } catch {
+    /* localStorage unavailable — ignore */
+  }
+}
+function recallFocal(fileName: string): string | undefined {
+  try {
+    return localStorage.getItem(rememberKey(fileName)) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 interface InternalState {
@@ -45,14 +78,21 @@ export interface AppState extends InternalState {
   selectedIds: string[];
   highlight: Highlight | null;
   notice: string | null;
+  viewOptions: ViewOptions;
+  focalPickerOpen: boolean;
 
   loadModel: (model: GenealogyModel, fileName: string) => void;
   setFocal: (personId: string) => void;
   selectPerson: (personId: string) => void;
+  deselectPerson: (personId: string) => void;
   clearSelection: () => void;
   expand: (personId: string, direction: 'ancestors' | 'descendants' | 'all') => void;
   showRelationship: (fromId: string, toId: string) => void;
   clearHighlight: () => void;
+  resetView: () => void;
+  setViewOptions: (partial: Partial<ViewOptions>) => void;
+  openFocalPicker: () => void;
+  closeFocalPicker: () => void;
   search: (query: string) => Person[];
   dismissWarnings: () => void;
 }
@@ -65,6 +105,22 @@ const emptyInternal: InternalState = {
   viewIds: new Set(),
 };
 
+/** Seed the visible node set from the ego network under the given view options. */
+function baseViewIds(
+  graph: Graph,
+  model: GenealogyModel,
+  focalId: string,
+  options: ViewOptions,
+): Set<string> {
+  const ego = getEgoNetwork(graph, model, focalId, {
+    ancestorGenerations: options.ancestorGenerations,
+    descendantGenerations: options.descendantGenerations,
+    includeSpouses: options.includeSpouses,
+    nodeBudget: NODE_BUDGET,
+  });
+  return new Set(ego.nodes.map((n) => n.person.id));
+}
+
 export const useStore = create<AppState>((set, get) => ({
   ...emptyInternal,
   fileName: null,
@@ -76,36 +132,54 @@ export const useStore = create<AppState>((set, get) => ({
   selectedIds: [],
   highlight: null,
   notice: null,
+  viewOptions: DEFAULT_VIEW_OPTIONS,
+  focalPickerOpen: false,
 
   loadModel: (model, fileName) => {
     const graph = buildGraph(model);
-    const focalPersonId = pickDefaultFocalPerson(graph, model);
-    if (!focalPersonId) {
-      set({
-        ...emptyInternal,
-        model,
-        graph,
-        fileName,
-        warnings: model.warnings,
-        focalPersonId: null,
-        view: null,
-        collapsePoints: [],
-        notice: 'No individuals found in this file.',
-      });
+    set({
+      ...emptyInternal,
+      model,
+      graph,
+      fileName,
+      warnings: model.warnings,
+      focalPersonId: null,
+      view: null,
+      collapsePoints: [],
+      detailPersonId: null,
+      selectedIds: [],
+      highlight: null,
+      focalPickerOpen: false,
+      notice: null,
+    });
+
+    if (model.persons.size === 0) {
+      set({ notice: 'No individuals found in this file.' });
       return;
     }
-    set({ ...emptyInternal, model, graph, fileName, warnings: model.warnings });
-    get().setFocal(focalPersonId);
+
+    // Focal precedence: remembered choice → declared home person → prompt.
+    const remembered = recallFocal(fileName);
+    const declared = model.header?.rootPersonId;
+    const chosen =
+      remembered && model.persons.has(remembered)
+        ? remembered
+        : declared && model.persons.has(declared)
+          ? declared
+          : undefined;
+
+    if (chosen) get().setFocal(chosen);
+    else set({ focalPickerOpen: true });
   },
 
   setFocal: (personId) => {
-    const { graph, model } = get();
+    const { graph, model, viewOptions, fileName } = get();
     if (!graph || !model) return;
     const collapsePoints = detectPedigreeCollapse(graph, personId);
     const collapseSet = new Set(collapsePoints.map((c) => c.ancestorId));
     const genMap = focalGenerations(graph, personId);
-    const ego = getEgoNetwork(graph, model, personId, { nodeBudget: NODE_BUDGET });
-    const viewIds = new Set(ego.nodes.map((n) => n.person.id));
+    const viewIds = baseViewIds(graph, model, personId, viewOptions);
+    rememberFocal(fileName, personId);
     set({
       focalPersonId: personId,
       collapsePoints,
@@ -117,17 +191,22 @@ export const useStore = create<AppState>((set, get) => ({
       selectedIds: [],
       highlight: null,
       notice: null,
+      focalPickerOpen: false,
     });
   },
 
-  selectPerson: (personId) => {
+  // Single click toggles selection (so a second click deselects); the detail
+  // panel always follows the clicked person. The compare uses the ≤2 selected.
+  selectPerson: (personId) =>
     set((s) => {
       const selectedIds = s.selectedIds.includes(personId)
-        ? s.selectedIds
+        ? s.selectedIds.filter((id) => id !== personId)
         : [...s.selectedIds, personId].slice(-2);
       return { detailPersonId: personId, selectedIds };
-    });
-  },
+    }),
+
+  deselectPerson: (personId) =>
+    set((s) => ({ selectedIds: s.selectedIds.filter((id) => id !== personId) })),
 
   clearSelection: () => set({ selectedIds: [] }),
 
@@ -167,6 +246,33 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   clearHighlight: () => set({ highlight: null }),
+
+  // Rebuild the default view for the current focal: drops expansions, selection,
+  // and highlight. Underlying data is untouched (read-only).
+  resetView: () => {
+    const { focalPersonId } = get();
+    if (focalPersonId) get().setFocal(focalPersonId);
+  },
+
+  setViewOptions: (partial) => {
+    const { graph, model, focalPersonId, collapseSet, genMap, viewOptions, highlight } =
+      get();
+    const next = { ...viewOptions, ...partial };
+    if (!graph || !model || !focalPersonId) {
+      set({ viewOptions: next });
+      return;
+    }
+    const ids = baseViewIds(graph, model, focalPersonId, next);
+    if (highlight) for (const id of highlight.nodeIds) ids.add(id);
+    set({
+      viewOptions: next,
+      viewIds: ids,
+      view: buildView(graph, model, focalPersonId, collapseSet, genMap, ids),
+    });
+  },
+
+  openFocalPicker: () => set({ focalPickerOpen: true }),
+  closeFocalPicker: () => set({ focalPickerOpen: false }),
 
   search: (query) => {
     const { model } = get();
