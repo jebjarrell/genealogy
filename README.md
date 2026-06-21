@@ -77,18 +77,24 @@ person, and renders the ego network. Sample fixtures live in
 - **Load** a `.ged` file → pick who _you_ are (the focal person) in the picker; the choice
   is remembered per file and changeable anytime from the header.
 - The graph renders **direct ancestors only** by default. Use the toolbar to toggle
-  **Spouses**, **Descendants**, and **Marriage links** back on.
+  **Spouses**, **Siblings**, **Descendants**, and **Marriage links** back on.
 - **Click** a person to open the detail panel (names, events, places, sources — each with
   the raw source string); click again to deselect.
-- **Expand** a person to reveal their not-yet-shown neighbors, subject to a node budget.
+- **Double-click** a person (or the **+** on a card) to **extend the pedigree** one more
+  generation back — parents only, so the graph stays to direct ancestors. (Use the detail
+  panel's **+ Descendants** / the **Siblings** toggle to bring in collaterals.)
+- **Search on Ancestry, FamilySearch, and DAR**: the detail panel builds pre-filled search
+  links for the selected person (no account or API needed — they open in a new tab).
 - **Search** by name and **set a new focal person**.
 - **Select two people** → see every distinct relationship path between them, each
   described in relationship terms. **Reset view** / **Clear paths** from the toolbar.
 - **Pedigree collapse** is surfaced three ways: node markers, a collapse report panel, and
   path highlighting on selection.
-- **Map** (the migration view): switch to **Map**, pick an ancestor, and scrub the year
-  slider to watch that ancestral line migrate over time. Geocoding uses OpenStreetMap
-  Nominatim — **place names** (not your file) are sent to OSM and cached locally.
+- **Map** (the migration view): switch to **Map** to see **all your ancestors' migration**
+  over time by default, or **focus a single line** (focal → a chosen ancestor); scrub the
+  year slider to animate it. Geocoding uses OpenStreetMap Nominatim — **place names** (not
+  your file) are sent to OSM and cached locally; messy strings (e.g. `Fleming Co., KY,
+  Kentucky, USA`) are cleaned and coarsened so historical places still resolve.
 - **Collapsible panels**: collapse the side panels to give the graph/map room.
 - **Data notes**: parse warnings and any path-enumeration truncation are surfaced in a
   dismissible panel — a malformed file still produces a usable graph.
