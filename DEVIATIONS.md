@@ -94,6 +94,35 @@ Each entry notes what the TRD said, what was decided, and why.
   `?raw` so the app is verifiable without sourcing a file; web tests load fixtures the same
   way (avoids Vite's `/@fs/` path prefix that breaks `import.meta.url`-based `fs` reads).
 
+## Follow-on round — UX fixes & migration map
+
+These were added after the owner reviewed the Step One viewer (see the approved plan).
+
+- **Focal person is now chosen, not guessed.** On load: remembered choice
+  (`localStorage`, per file) → declared home person → a picker modal. The youngest-leaf
+  heuristic is only a _suggestion_ in the picker now.
+- **Default graph view is "direct ancestors only".** Spouses/descendants/marriage edges are
+  hidden by default (kills the step-relative + marriage-edge clutter the owner saw); a
+  toolbar toggles them back. Implemented purely via existing `getEgoNetwork` options +
+  display filtering — no core changes.
+- **Migration map (Step Two, now built).** Scope agreed in planning: a _specific ancestral
+  line's_ migration — pick focal + an ancestor, take that lineage (`enumeratePaths`), gather
+  each person's located events (`extractEventSequence`), geocode, and animate by year with a
+  time slider. Map renderer: **Leaflet + react-leaflet 4.2** (React-18 compatible; v5 needs
+  React 19), with `CircleMarker`s (avoids Leaflet's bundler icon-asset pitfall) and a
+  chronological polyline colored blue→red.
+- **Geocoding privacy tradeoff (owner-accepted).** The map sends **place names** (never the
+  file) to **OpenStreetMap Nominatim**, cached in `localStorage` so each place is fetched at
+  most once. This relaxes the original "nothing leaves the machine" stance for the map only.
+  Browser caveat: browsers forbid setting the `User-Agent` header, so the resolver's UA is
+  dropped and Nominatim identifies the app via Origin/Referer; mitigated with a ≥1s rate
+  limit and caching. The geocoder is a `createGeocoder({ fetchImpl, storage })` factory so
+  tests inject a fake fetch + in-memory storage (no real network in CI).
+- **Still read-only.** "Clear/reset" was added (clear selection/paths, reset view); actual
+  data **editing (corrections + GEDCOM export)** remains scoped-but-unbuilt — its open
+  question is faithful round-trip (retain the raw `read-gedcom` tree and patch it, since the
+  library has no writer) vs. lossy export from our model. Deferred to its own phase.
+
 ## Portability lint rule
 
 - Implemented with core ESLint rules (`no-restricted-imports` + `no-restricted-globals`)

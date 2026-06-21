@@ -9,8 +9,10 @@ import { PathsPanel } from './panels/PathsPanel.js';
 import { DataNotes } from './panels/DataNotes.js';
 import { ViewControls } from './panels/ViewControls.js';
 import { FocalPicker } from './panels/FocalPicker.js';
+import { MapView } from './map/MapView.js';
 
 type LeftTab = 'search' | 'collapse';
+type MainView = 'graph' | 'map';
 
 /** Boolean UI state persisted to localStorage so panel layout survives reloads. */
 function usePersisted(key: string, initial: boolean) {
@@ -68,6 +70,7 @@ export function App() {
   const [leftTab, setLeftTab] = useState<LeftTab>('collapse');
   const [leftOpen, setLeftOpen] = usePersisted('ui:leftOpen', true);
   const [rightOpen, setRightOpen] = usePersisted('ui:rightOpen', true);
+  const [mainView, setMainView] = useState<MainView>('graph');
 
   return (
     <div className="flex h-full flex-col bg-gray-100 text-gray-900">
@@ -92,7 +95,26 @@ export function App() {
             </div>
           )}
         </div>
-        <UploadButton />
+        <div className="flex items-center gap-3">
+          {model && (
+            <div className="flex overflow-hidden rounded border border-gray-300 text-sm">
+              <button
+                className={`px-3 py-1 ${mainView === 'graph' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
+                onClick={() => setMainView('graph')}
+              >
+                Graph
+              </button>
+              <button
+                className={`px-3 py-1 ${mainView === 'map' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
+                onClick={() => setMainView('map')}
+                title="Migration map for an ancestral line"
+              >
+                Map
+              </button>
+            </div>
+          )}
+          <UploadButton />
+        </div>
       </header>
 
       {!model ? (
@@ -142,8 +164,14 @@ export function App() {
           )}
 
           <main className="relative min-w-0 flex-1">
-            <ViewControls />
-            <GraphCanvas />
+            {mainView === 'graph' ? (
+              <>
+                <ViewControls />
+                <GraphCanvas />
+              </>
+            ) : (
+              <MapView />
+            )}
             <DataNotes />
           </main>
 

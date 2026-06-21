@@ -74,16 +74,22 @@ person, and renders the ego network. Sample fixtures live in
 
 ## Using the viewer
 
-- **Load** a `.ged` file → ego network renders (focal person + 4 ancestor generations,
-  spouses shown, descendants off).
+- **Load** a `.ged` file → pick who _you_ are (the focal person) in the picker; the choice
+  is remembered per file and changeable anytime from the header.
+- The graph renders **direct ancestors only** by default. Use the toolbar to toggle
+  **Spouses**, **Descendants**, and **Marriage links** back on.
 - **Click** a person to open the detail panel (names, events, places, sources — each with
-  the raw source string).
+  the raw source string); click again to deselect.
 - **Expand** a person to reveal their not-yet-shown neighbors, subject to a node budget.
 - **Search** by name and **set a new focal person**.
 - **Select two people** → see every distinct relationship path between them, each
-  described in relationship terms.
+  described in relationship terms. **Reset view** / **Clear paths** from the toolbar.
 - **Pedigree collapse** is surfaced three ways: node markers, a collapse report panel, and
   path highlighting on selection.
+- **Map** (the migration view): switch to **Map**, pick an ancestor, and scrub the year
+  slider to watch that ancestral line migrate over time. Geocoding uses OpenStreetMap
+  Nominatim — **place names** (not your file) are sent to OSM and cached locally.
+- **Collapsible panels**: collapse the side panels to give the graph/map room.
 - **Data notes**: parse warnings and any path-enumeration truncation are surfaced in a
   dismissible panel — a malformed file still produces a usable graph.
 

@@ -80,6 +80,8 @@ export interface AppState extends InternalState {
   notice: string | null;
   viewOptions: ViewOptions;
   focalPickerOpen: boolean;
+  /** Chosen ancestor for the migration map (lineage = focal → this person). */
+  mapAncestorId: string | null;
 
   loadModel: (model: GenealogyModel, fileName: string) => void;
   setFocal: (personId: string) => void;
@@ -93,6 +95,7 @@ export interface AppState extends InternalState {
   setViewOptions: (partial: Partial<ViewOptions>) => void;
   openFocalPicker: () => void;
   closeFocalPicker: () => void;
+  setMapAncestor: (personId: string | null) => void;
   search: (query: string) => Person[];
   dismissWarnings: () => void;
 }
@@ -134,6 +137,7 @@ export const useStore = create<AppState>((set, get) => ({
   notice: null,
   viewOptions: DEFAULT_VIEW_OPTIONS,
   focalPickerOpen: false,
+  mapAncestorId: null,
 
   loadModel: (model, fileName) => {
     const graph = buildGraph(model);
@@ -151,6 +155,7 @@ export const useStore = create<AppState>((set, get) => ({
       highlight: null,
       focalPickerOpen: false,
       notice: null,
+      mapAncestorId: null,
     });
 
     if (model.persons.size === 0) {
@@ -192,6 +197,7 @@ export const useStore = create<AppState>((set, get) => ({
       highlight: null,
       notice: null,
       focalPickerOpen: false,
+      mapAncestorId: null,
     });
   },
 
@@ -273,6 +279,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   openFocalPicker: () => set({ focalPickerOpen: true }),
   closeFocalPicker: () => set({ focalPickerOpen: false }),
+  setMapAncestor: (personId) => set({ mapAncestorId: personId }),
 
   search: (query) => {
     const { model } = get();
