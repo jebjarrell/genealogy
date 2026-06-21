@@ -10,9 +10,10 @@ import { DataNotes } from './panels/DataNotes.js';
 import { ViewControls } from './panels/ViewControls.js';
 import { FocalPicker } from './panels/FocalPicker.js';
 import { MapView } from './map/MapView.js';
+import { FamilyPanel } from './panels/FamilyPanel.js';
 
 type LeftTab = 'search' | 'collapse';
-type MainView = 'graph' | 'map';
+type MainView = 'graph' | 'map' | 'family';
 
 /** Boolean UI state persisted to localStorage so panel layout survives reloads. */
 function usePersisted(key: string, initial: boolean) {
@@ -111,6 +112,13 @@ export function App() {
               >
                 Map
               </button>
+              <button
+                className={`px-3 py-1 ${mainView === 'family' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
+                onClick={() => setMainView('family')}
+                title="Family statistics across your ancestors"
+              >
+                Family
+              </button>
             </div>
           )}
           <UploadButton />
@@ -164,14 +172,14 @@ export function App() {
           )}
 
           <main className="relative min-w-0 flex-1">
-            {mainView === 'graph' ? (
+            {mainView === 'graph' && (
               <>
                 <ViewControls />
                 <GraphCanvas />
               </>
-            ) : (
-              <MapView />
             )}
+            {mainView === 'map' && <MapView />}
+            {mainView === 'family' && <FamilyPanel />}
             <DataNotes />
           </main>
 
