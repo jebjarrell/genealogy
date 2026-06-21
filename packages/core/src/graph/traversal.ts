@@ -49,3 +49,22 @@ export function getDescendants(
 ): string[] {
   return walk(graph.childrenOf, personId, generations);
 }
+
+/**
+ * Siblings of `personId`: the other children of their parents (the person
+ * themself excluded). Half-siblings are included — anyone sharing ≥1 parent.
+ * Order follows the parents' child lists, deduplicated.
+ */
+export function getSiblings(graph: Graph, personId: string): string[] {
+  const seen = new Set<string>([personId]);
+  const siblings: string[] = [];
+  for (const parent of graph.parentsOf.get(personId) ?? []) {
+    for (const child of graph.childrenOf.get(parent) ?? []) {
+      if (!seen.has(child)) {
+        seen.add(child);
+        siblings.push(child);
+      }
+    }
+  }
+  return siblings;
+}
