@@ -1,5 +1,6 @@
 import type { Place, PlaceResolver, ResolvedPlace } from '@genealogy/core';
 import { placeQueryCandidates, type QueryResult } from './place-query.js';
+import { globalFetch } from './fetch.js';
 
 export interface PhotonResolverOptions {
   /** Injectable for testing; defaults to the global `fetch`. */
@@ -42,7 +43,7 @@ export class PhotonResolver implements PlaceResolver {
   private lastRequestAt = 0;
 
   constructor(options: PhotonResolverOptions = {}) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? globalFetch();
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
   }

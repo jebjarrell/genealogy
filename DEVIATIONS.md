@@ -189,6 +189,16 @@ The viewer stays read-only.
   blocked Nominatim hands off to Photon quickly instead of wading through every candidate.
   `PlaceResolutionSource` gains `'photon'`. (Couldn't live-verify here — the sandbox has no
   geocoder egress — but it's unit-tested with injected fetch; real verification is in-browser.)
+- **Root cause of the geocoding failure (found post-merge).** The reason geocoding produced
+  zero results in the browser — through both Round 1 and the Photon work — was not the query
+  strings or the service: the resolvers stored the global `fetch` as an object property
+  (`this.fetchImpl = options.fetchImpl ?? fetch`) and called it as `this.fetchImpl(...)`.
+  Native `fetch` must be invoked with `this === window`/`globalThis`; called as a method of
+  another object the browser throws `TypeError: Illegal invocation`, which the resolvers'
+  try/catch swallowed → `null` from every provider. Unit tests never caught it because they
+  always inject a plain `fetch`. Fixed with `globalFetch()` (`packages/geo/src/fetch.ts`),
+  which binds the global fetch; both resolvers use it, and a regression test stubs
+  `globalThis.fetch` with a strict-`this` function to reproduce the browser behaviour.
 
 ## Portability lint rule
 

@@ -67,6 +67,27 @@ describe('PhotonResolver', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1); // bailed, did not try coarser queries
   });
 
+  it('binds the default global fetch (no "Illegal invocation" in the browser)', async () => {
+    // Reproduces the browser bug: native fetch must be called with `this` ===
+    // the global. A resolver that stores `this.fetchImpl = fetch` and calls
+    // `this.fetchImpl()` invokes it with `this` === the resolver and throws.
+    const original = globalThis.fetch;
+    try {
+      const strictFetch = function (this: unknown) {
+        if (this !== globalThis && this !== undefined) {
+          throw new TypeError("Failed to execute 'fetch': Illegal invocation");
+        }
+        return Promise.resolve(featureCollection(-83.6, 37.8));
+      };
+      globalThis.fetch = strictFetch as unknown as typeof fetch;
+      const resolver = new PhotonResolver({ minIntervalMs: 0 }); // no fetchImpl → global
+      const result = await resolver.resolve(place('Fleming County, Kentucky, United States'));
+      expect(result).toMatchObject({ lat: 37.8, lon: -83.6 });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it('never throws when fetch rejects', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('network down');
