@@ -55,6 +55,20 @@ export {
 // ---- Military service & war classification (profile + analytics) ---------
 export { WAR_ERAS, classifyWar, militaryServiceOf } from './military/wars.js';
 export type { WarEra, MilitaryService } from './military/wars.js';
+export {
+  standardizeMilitaryEvent,
+  militaryServiceRecords,
+} from './military/standardize.js';
+export type { MilitaryServiceRecord } from './military/standardize.js';
+
+// ---- Edit layer: non-destructive person merge (op-log overlay) -----------
+export { mergePersons, applyMerges } from './edit/merge.js';
+export type { MergeOp } from './edit/merge.js';
+
+// ---- Data export (derived GEDCOM + lossless JSON) ------------------------
+export { writeGedcom } from './export/gedcom.js';
+export { exportModelJson } from './export/json.js';
+export type { ExportedModelJson } from './export/json.js';
 
 // ---- Profile bio sketch -------------------------------------------------
 export { personSketch } from './profile/sketch.js';
