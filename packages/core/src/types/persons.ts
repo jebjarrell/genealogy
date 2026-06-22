@@ -19,4 +19,9 @@ export interface Person {
   familyIdAsChild?: string;
   sources: SourceCitation[];
   notes?: string[];
+  /**
+   * Ids of person records merged into this one (provenance for the edit layer).
+   * Present only on records that are the result of one or more merges.
+   */
+  mergedFromIds?: string[];
 }

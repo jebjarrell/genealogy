@@ -149,6 +149,27 @@ describe('NominatimResolver', () => {
     expect(capturedUrl).toContain('Floyd%2C+Kentucky%2C+United+States');
   });
 
+  it('binds the default global fetch (no "Illegal invocation" in the browser)', async () => {
+    const original = globalThis.fetch;
+    try {
+      const strictFetch = function (this: unknown) {
+        if (this !== globalThis && this !== undefined) {
+          throw new TypeError("Failed to execute 'fetch': Illegal invocation");
+        }
+        return Promise.resolve(jsonResponse([{ lat: '37.5', lon: '-82.7' }]));
+      };
+      globalThis.fetch = strictFetch as unknown as typeof fetch;
+      const resolver = new NominatimResolver({
+        userAgent: 'genealogy-test/1.0',
+        minIntervalMs: 0,
+      }); // no fetchImpl → global
+      const result = await resolver.resolve(makePlace());
+      expect(result).toMatchObject({ lat: 37.5, lon: -82.7 });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it('bails on a provider error without coarsening (so a fallback can run)', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: 'blocked' }, 403));
     const resolver = new NominatimResolver({

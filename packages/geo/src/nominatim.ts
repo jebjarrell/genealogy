@@ -1,5 +1,6 @@
 import type { Place, PlaceResolver, ResolvedPlace } from '@genealogy/core';
 import { placeQueryCandidates, type QueryResult } from './place-query.js';
+import { globalFetch } from './fetch.js';
 
 export interface NominatimResolverOptions {
   /** Required by the Nominatim usage policy; identifies this application. */
@@ -47,7 +48,7 @@ export class NominatimResolver implements PlaceResolver {
 
   constructor(options: NominatimResolverOptions) {
     this.userAgent = options.userAgent;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl ?? globalFetch();
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
   }

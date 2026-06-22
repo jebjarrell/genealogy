@@ -3,6 +3,38 @@
 A running log of judgment calls made during implementation, for owner review.
 Each entry notes what the TRD said, what was decided, and why.
 
+## Phase-2 review round 3 — non-destructive merge editing + military standardization
+
+The viewer gains its first **edits**. This revises the original "read-only viewer" stance
+(TRD §1.3): edits are non-destructive and the pristine parsed model is never mutated.
+
+- **Originals are sacred → op-log overlay (owner decision).** The store keeps a pristine
+  `baseModel` plus a `merges: MergeOp[]` list; the working model is `applyMerges(baseModel,
+  merges)`. Undo = drop an op and replay. Merges persist per file in `localStorage`
+  (`genealogy:merges:<file>`) and replay on load. No in-place mutation anywhere.
+- **Pure merge engine.** `mergePersons(model, keepId, mergeId)` returns a NEW model: keep the
+  target's primary name (others kept as alternates), sex (filled from source if unknown),
+  parents; union events/spouse-families/sources/notes with dedupe; rewrite `mergeId→keepId`
+  across families + event participants; guard self-loops (own-parent, two-spouses-of-one-family);
+  record `Person.mergedFromIds`. `applyMerges` replays idempotently and skips ops whose records
+  are gone (resilient).
+- **Merge UX (owner decision: select-two, not drag).** Dagre lays the graph out with fixed
+  positions, so drag-to-merge would fight the layout. Instead a **Merge 2** action appears when
+  two people are selected (reusing the existing 2-selection), opening a confirm modal with a
+  keep/merge choice and a before→after preview (auto-merge with preview, per owner).
+- **Review tab + persistence.** A 4th top-tab lists applied merges with **Undo**. The store
+  remaps focal/detail/selection/map-ancestor ids through the merge chain so the UI never points
+  at a removed record.
+- **Data export (owner decision: persist + export).** `writeGedcom(model)` emits GEDCOM 5.5.1
+  from the **modeled** fields — a *derived* export (custom/unmodeled GEDCOM tags are not
+  preserved), clearly labeled in the Review tab. `exportModelJson(model)` is lossless for this
+  app's model. Both download client-side; nothing leaves the browser.
+- **Military-service standardization (#10).** `standardizeMilitaryEvent` derives
+  `{ war, branch, unit, rank, serviceDates }` from a military event's free text + date via
+  conservative regex heuristics, preserving the raw description. War still comes from the event
+  date first (Round 2's `classifyWar`), with keyword fallback. Surfaced in the detail panel.
+- **Deferred:** a field-by-field conflict picker and auto-suggesting duplicate pairs (both v2).
+
 ## Phase ordering
 
 - **TRD §0 / §12 reference "the phase order given in Section 12", but Section 12 is the
@@ -189,6 +221,16 @@ The viewer stays read-only.
   blocked Nominatim hands off to Photon quickly instead of wading through every candidate.
   `PlaceResolutionSource` gains `'photon'`. (Couldn't live-verify here — the sandbox has no
   geocoder egress — but it's unit-tested with injected fetch; real verification is in-browser.)
+- **Root cause of the geocoding failure (found post-merge).** The reason geocoding produced
+  zero results in the browser — through both Round 1 and the Photon work — was not the query
+  strings or the service: the resolvers stored the global `fetch` as an object property
+  (`this.fetchImpl = options.fetchImpl ?? fetch`) and called it as `this.fetchImpl(...)`.
+  Native `fetch` must be invoked with `this === window`/`globalThis`; called as a method of
+  another object the browser throws `TypeError: Illegal invocation`, which the resolvers'
+  try/catch swallowed → `null` from every provider. Unit tests never caught it because they
+  always inject a plain `fetch`. Fixed with `globalFetch()` (`packages/geo/src/fetch.ts`),
+  which binds the global fetch; both resolvers use it, and a regression test stubs
+  `globalThis.fetch` with a strict-`this` function to reproduce the browser behaviour.
 
 ## Portability lint rule
 

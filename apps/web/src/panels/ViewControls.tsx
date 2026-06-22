@@ -9,6 +9,8 @@ export function ViewControls() {
   const resetView = useStore((s) => s.resetView);
   const highlight = useStore((s) => s.highlight);
   const clearHighlight = useStore((s) => s.clearHighlight);
+  const selectedIds = useStore((s) => s.selectedIds);
+  const openMerge = useStore((s) => s.openMerge);
 
   const toggle = (key: 'includeSpouses' | 'showMarriageEdges' | 'showSiblings') =>
     setViewOptions({ [key]: !viewOptions[key] });
@@ -75,6 +77,15 @@ export function ViewControls() {
         Marriage links
       </Chip>
       <span className="mx-1 h-4 w-px bg-gray-200" />
+      {selectedIds.length === 2 && (
+        <button
+          className="rounded-full border border-emerald-400 bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+          onClick={openMerge}
+          title="Merge the two selected people into one record"
+        >
+          Merge 2
+        </button>
+      )}
       {highlight && (
         <button
           className="rounded-full border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
