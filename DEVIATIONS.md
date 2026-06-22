@@ -158,6 +158,38 @@ Added after the owner used the migration map on a real file (see the approved pl
   a POST form that can't be deep-linked, so the DAR link is a site-scoped web search
   (`site:services.dar.org <name>`) — reliable prefill without guessing their form params.
 
+## Phase-2 review round 2 — profile sketch, Family analytics, geocoding fallback
+
+Built after Round 1 merged; UX confirmed with the owner. Pure logic lives in
+`@genealogy/core` (firewall-safe); rendering and network in `apps/web`/`@genealogy/geo`.
+The viewer stays read-only.
+
+- **FamilySearch-style profile bio sketch (#9).** New pure `personSketch`
+  (`packages/core/src/profile/sketch.ts`) summarises birth, death (+ age), spouse(s),
+  child count, and military service. The detail panel renders it at the top and — per the
+  owner's choice — **keeps the full events / relationships / sources lists below it**
+  (nothing hidden). "Spouse"/"Children" appear both in the sketch and the detailed lists by
+  design.
+- **Military detection is explicit-only (owner's choice).** New `packages/core/src/military/
+  wars.ts`: `WAR_ERAS` + `classifyWar(year)` + `militaryServiceOf(model, id)`. Service is
+  flagged only from GEDCOM military events (`MILI`/`_MILT` → `type: 'military'`), and the war
+  is keyed off the event's year — no inference from lifespan overlap (accuracy over breadth).
+- **"Family" analytics tab (#11).** New pure `computeFamilyStats`
+  (`packages/core/src/analytics/family-stats.ts`) over the focal person's **direct ancestors**
+  (chosen scope): ancestor count + max generation (headline), longevity (avg/median of known
+  birth→death), most common birth region (a `regionOf` that drops a trailing country token so
+  "City, State, Country" → State), average children per ancestral couple, and military service
+  by war. A new "Family" top-tab (beside Graph/Map) renders it; Review stays for Round 3.
+- **Geocoding fallback + fast-fail (folded in from the deferred Round 1 issue).** Round 1's
+  query cleanup was correct, but the public OSM Nominatim can still block/rate-limit the
+  browser. Added **`PhotonResolver`** (`packages/geo/src/photon.ts`) — komoot's CORS-friendly,
+  no-User-Agent OSM geocoder — as a fallback after Nominatim in the caching chain. Resolvers
+  now distinguish a **miss** (200 + no result → coarsen the query) from a **provider error**
+  (HTTP/network → stop and let the fallback run), via a shared `QueryResult` type, so a
+  blocked Nominatim hands off to Photon quickly instead of wading through every candidate.
+  `PlaceResolutionSource` gains `'photon'`. (Couldn't live-verify here — the sandbox has no
+  geocoder egress — but it's unit-tested with injected fetch; real verification is in-browser.)
+
 ## Portability lint rule
 
 - Implemented with core ESLint rules (`no-restricted-imports` + `no-restricted-globals`)

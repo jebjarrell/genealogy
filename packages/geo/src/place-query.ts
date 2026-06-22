@@ -1,4 +1,15 @@
-import type { Place } from '@genealogy/core';
+import type { Place, ResolvedPlace } from '@genealogy/core';
+
+/**
+ * Outcome of a single geocoder query. Distinguishing a MISS (the service
+ * answered but found nothing → coarsen the query) from an ERROR (HTTP/network
+ * failure → the service is unavailable, fall through to the next provider) lets
+ * a blocked/rate-limited provider hand off to a fallback quickly.
+ */
+export type QueryResult =
+  | { kind: 'hit'; place: ResolvedPlace }
+  | { kind: 'miss' }
+  | { kind: 'error' };
 
 // Turning a free-text GEDCOM place into queries Nominatim can actually match.
 //

@@ -149,6 +149,22 @@ describe('NominatimResolver', () => {
     expect(capturedUrl).toContain('Floyd%2C+Kentucky%2C+United+States');
   });
 
+  it('bails on a provider error without coarsening (so a fallback can run)', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: 'blocked' }, 403));
+    const resolver = new NominatimResolver({
+      userAgent: 'genealogy-test/1.0',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+    const result = await resolver.resolve({
+      raw: 'Fleming Co., KY, Kentucky, USA',
+      normalized: 'fleming co., ky, kentucky, usa',
+      parts: ['Fleming Co.', 'KY', 'Kentucky', 'USA'],
+    });
+    expect(result).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // did not wade through coarser queries
+  });
+
   it('coarsens the query when a precise locality misses', async () => {
     const queries: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {

@@ -52,5 +52,27 @@ export {
   greatPrefix,
 } from './relationship/ordinals.js';
 
+// ---- Military service & war classification (profile + analytics) ---------
+export { WAR_ERAS, classifyWar, militaryServiceOf } from './military/wars.js';
+export type { WarEra, MilitaryService } from './military/wars.js';
+
+// ---- Profile bio sketch -------------------------------------------------
+export { personSketch } from './profile/sketch.js';
+export type {
+  PersonSketch,
+  SketchEvent,
+  SketchSpouse,
+} from './profile/sketch.js';
+
+// ---- Family analytics ---------------------------------------------------
+export { computeFamilyStats } from './analytics/family-stats.js';
+export type {
+  FamilyStats,
+  Longevity,
+  RegionTally,
+  FamilySize,
+  WarTally,
+} from './analytics/family-stats.js';
+
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';

@@ -1,4 +1,4 @@
-import { describeRelationship } from '@genealogy/core';
+import { describeRelationship, personSketch } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
@@ -57,6 +57,68 @@ function RelationshipList({ title, ids }: { title: string; ids: string[] }) {
         })}
       </ul>
     </div>
+  );
+}
+
+// FamilySearch-style bio sketch shown at the top of the profile. The full event,
+// relationship, and source lists remain below it (owner's choice).
+function BioSketch({ personId }: { personId: string }) {
+  const model = useStore((s) => s.model);
+  const graph = useStore((s) => s.graph);
+  const selectPerson = useStore((s) => s.selectPerson);
+  if (!model || !graph) return null;
+  const sketch = personSketch(model, graph, personId);
+  if (!sketch) return null;
+
+  const eventLine = (e?: { dateRaw?: string; place?: string }) =>
+    e ? [e.dateRaw, e.place].filter(Boolean).join(' · ') || '—' : '—';
+
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="flex gap-2">
+      <dt className="w-20 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-400">
+        {label}
+      </dt>
+      <dd className="min-w-0 flex-1 text-sm text-gray-700">{children}</dd>
+    </div>
+  );
+
+  return (
+    <dl className="space-y-1 rounded-md bg-gray-50 p-2">
+      <Row label="Born">{eventLine(sketch.birth)}</Row>
+      <Row label="Died">
+        {eventLine(sketch.death)}
+        {sketch.ageAtDeath !== undefined && (
+          <span className="text-gray-400"> · age {sketch.ageAtDeath}</span>
+        )}
+      </Row>
+      <Row label="Spouse">
+        {sketch.spouses.length === 0 ? (
+          '—'
+        ) : (
+          sketch.spouses.map((sp, i) => (
+            <span key={sp.id}>
+              {i > 0 && ', '}
+              <button
+                className="text-blue-700 hover:underline"
+                onClick={() => selectPerson(sp.id)}
+              >
+                {sp.name}
+              </button>
+            </span>
+          ))
+        )}
+      </Row>
+      <Row label="Children">{sketch.childrenCount}</Row>
+      <Row label="Military">
+        {sketch.military.served ? (
+          <span className="font-medium text-emerald-700">
+            Yes{sketch.military.wars.length > 0 && ` · ${sketch.military.wars.join(', ')}`}
+          </span>
+        ) : (
+          'No'
+        )}
+      </Row>
+    </dl>
   );
 }
 
@@ -152,6 +214,8 @@ export function DetailPanel() {
           )}
         </div>
       </div>
+
+      <BioSketch personId={person.id} />
 
       <div className="flex flex-wrap gap-1">
         <button
