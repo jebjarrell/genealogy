@@ -11,9 +11,11 @@ import { ViewControls } from './panels/ViewControls.js';
 import { FocalPicker } from './panels/FocalPicker.js';
 import { MapView } from './map/MapView.js';
 import { FamilyPanel } from './panels/FamilyPanel.js';
+import { ReviewPanel } from './panels/ReviewPanel.js';
+import { MergeConfirm } from './panels/MergeConfirm.js';
 
 type LeftTab = 'search' | 'collapse';
-type MainView = 'graph' | 'map' | 'family';
+type MainView = 'graph' | 'map' | 'family' | 'review';
 
 /** Boolean UI state persisted to localStorage so panel layout survives reloads. */
 function usePersisted(key: string, initial: boolean) {
@@ -119,6 +121,13 @@ export function App() {
               >
                 Family
               </button>
+              <button
+                className={`px-3 py-1 ${mainView === 'review' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
+                onClick={() => setMainView('review')}
+                title="Review merges and export your data"
+              >
+                Review
+              </button>
             </div>
           )}
           <UploadButton />
@@ -180,6 +189,7 @@ export function App() {
             )}
             {mainView === 'map' && <MapView />}
             {mainView === 'family' && <FamilyPanel />}
+            {mainView === 'review' && <ReviewPanel />}
             <DataNotes />
           </main>
 
@@ -213,6 +223,7 @@ export function App() {
       )}
 
       <FocalPicker />
+      <MergeConfirm />
     </div>
   );
 }

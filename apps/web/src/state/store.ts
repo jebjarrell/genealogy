@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  applyMerges,
   buildGraph,
   detectPedigreeCollapse,
   enumerateRelationshipPaths,
@@ -10,6 +11,7 @@ import {
   type GenealogyModel,
   type Graph,
   type GraphView,
+  type MergeOp,
   type ParseWarning,
   type Path,
   type Person,
@@ -64,6 +66,49 @@ function recallFocal(fileName: string): string | undefined {
   }
 }
 
+// Persist the merge op-log per file (the edit layer). The pristine parsed model
+// is never written; merges are replayed over it on load (originals are sacred).
+const mergesKey = (fileName: string) => `genealogy:merges:${fileName}`;
+function loadMerges(fileName: string | null): MergeOp[] {
+  if (!fileName) return [];
+  try {
+    const raw = localStorage.getItem(mergesKey(fileName));
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as MergeOp[]) : [];
+  } catch {
+    return [];
+  }
+}
+function saveMerges(fileName: string | null, ops: MergeOp[]): void {
+  if (!fileName) return;
+  try {
+    localStorage.setItem(mergesKey(fileName), JSON.stringify(ops));
+  } catch {
+    /* localStorage unavailable — ignore */
+  }
+}
+
+/**
+ * Map an id that may have been merged away to its surviving record. Follows the
+ * mergeId→keepId chain; returns null if no survivor exists in the model.
+ */
+function survivorOf(
+  id: string | null,
+  ops: MergeOp[],
+  model: GenealogyModel,
+): string | null {
+  if (!id) return null;
+  if (model.persons.has(id)) return id;
+  const byMerge = new Map(ops.map((op) => [op.mergeId, op.keepId]));
+  let cur = id;
+  const seen = new Set<string>();
+  while (!model.persons.has(cur) && byMerge.has(cur) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = byMerge.get(cur)!;
+  }
+  return model.persons.has(cur) ? cur : null;
+}
+
 interface InternalState {
   model: GenealogyModel | null;
   graph: Graph | null;
@@ -73,6 +118,10 @@ interface InternalState {
 }
 
 export interface AppState extends InternalState {
+  /** Pristine parsed model; the working `model` is `applyMerges(baseModel, merges)`. */
+  baseModel: GenealogyModel | null;
+  /** Applied merge ops (the edit layer), persisted per file. */
+  merges: MergeOp[];
   fileName: string | null;
   focalPersonId: string | null;
   view: GraphView | null;
@@ -84,6 +133,8 @@ export interface AppState extends InternalState {
   notice: string | null;
   viewOptions: ViewOptions;
   focalPickerOpen: boolean;
+  /** The merge-confirmation modal is open. */
+  mergeOpen: boolean;
   /** Chosen ancestor for the migration map (lineage = focal → this person). */
   mapAncestorId: string | null;
 
@@ -99,6 +150,12 @@ export interface AppState extends InternalState {
   setViewOptions: (partial: Partial<ViewOptions>) => void;
   openFocalPicker: () => void;
   closeFocalPicker: () => void;
+  openMerge: () => void;
+  closeMerge: () => void;
+  /** Fold `mergeId` into `keepId`: append an op, persist, replay, refresh. */
+  mergePeople: (keepId: string, mergeId: string) => void;
+  /** Undo the merge at `index` in the op-log. */
+  undoMerge: (index: number) => void;
   setMapAncestor: (personId: string | null) => void;
   search: (query: string) => Person[];
   dismissWarnings: () => void;
@@ -139,8 +196,31 @@ function baseViewIds(
   return ids;
 }
 
+/** Focal-dependent derived state (collapse, generations, visible ids, view). */
+function deriveFocalState(
+  graph: Graph,
+  model: GenealogyModel,
+  focalId: string,
+  options: ViewOptions,
+): Pick<AppState, 'collapsePoints' | 'collapseSet' | 'genMap' | 'viewIds' | 'view'> {
+  const collapsePoints = detectPedigreeCollapse(graph, focalId);
+  const collapseSet = new Set(collapsePoints.map((c) => c.ancestorId));
+  const genMap = focalGenerations(graph, focalId);
+  const viewIds = baseViewIds(graph, model, focalId, options);
+  return {
+    collapsePoints,
+    collapseSet,
+    genMap,
+    viewIds,
+    view: buildView(graph, model, focalId, collapseSet, genMap, viewIds),
+  };
+}
+
 export const useStore = create<AppState>((set, get) => ({
   ...emptyInternal,
+  baseModel: null,
+  merges: [],
+  mergeOpen: false,
   fileName: null,
   focalPersonId: null,
   view: null,
@@ -154,10 +234,15 @@ export const useStore = create<AppState>((set, get) => ({
   focalPickerOpen: false,
   mapAncestorId: null,
 
-  loadModel: (model, fileName) => {
+  loadModel: (baseModel, fileName) => {
+    // Replay any persisted merges over the pristine parsed model.
+    const merges = loadMerges(fileName);
+    const model = applyMerges(baseModel, merges);
     const graph = buildGraph(model);
     set({
       ...emptyInternal,
+      baseModel,
+      merges,
       model,
       graph,
       fileName,
@@ -169,6 +254,7 @@ export const useStore = create<AppState>((set, get) => ({
       selectedIds: [],
       highlight: null,
       focalPickerOpen: false,
+      mergeOpen: false,
       notice: null,
       mapAncestorId: null,
     });
@@ -195,18 +281,10 @@ export const useStore = create<AppState>((set, get) => ({
   setFocal: (personId) => {
     const { graph, model, viewOptions, fileName } = get();
     if (!graph || !model) return;
-    const collapsePoints = detectPedigreeCollapse(graph, personId);
-    const collapseSet = new Set(collapsePoints.map((c) => c.ancestorId));
-    const genMap = focalGenerations(graph, personId);
-    const viewIds = baseViewIds(graph, model, personId, viewOptions);
     rememberFocal(fileName, personId);
     set({
       focalPersonId: personId,
-      collapsePoints,
-      collapseSet,
-      genMap,
-      viewIds,
-      view: buildView(graph, model, personId, collapseSet, genMap, viewIds),
+      ...deriveFocalState(graph, model, personId, viewOptions),
       detailPersonId: personId,
       selectedIds: [],
       highlight: null,
@@ -294,6 +372,61 @@ export const useStore = create<AppState>((set, get) => ({
 
   openFocalPicker: () => set({ focalPickerOpen: true }),
   closeFocalPicker: () => set({ focalPickerOpen: false }),
+  openMerge: () => set({ mergeOpen: true }),
+  closeMerge: () => set({ mergeOpen: false }),
+
+  mergePeople: (keepId, mergeId) => {
+    const { baseModel, merges, fileName, focalPersonId, detailPersonId, mapAncestorId, viewOptions } =
+      get();
+    if (!baseModel || keepId === mergeId) return;
+    const nextMerges = [...merges, { keepId, mergeId, at: new Date().toISOString() }];
+    const model = applyMerges(baseModel, nextMerges);
+    const graph = buildGraph(model);
+    saveMerges(fileName, nextMerges);
+
+    const focal = survivorOf(focalPersonId, nextMerges, model);
+    set({
+      model,
+      graph,
+      merges: nextMerges,
+      mergeOpen: false,
+      selectedIds: [],
+      highlight: null,
+      detailPersonId: survivorOf(detailPersonId, nextMerges, model) ?? keepId,
+      mapAncestorId: survivorOf(mapAncestorId, nextMerges, model),
+      notice: 'Merged. Undo it any time from the Review tab.',
+      ...(focal
+        ? { focalPersonId: focal, ...deriveFocalState(graph, model, focal, viewOptions) }
+        : {}),
+    });
+  },
+
+  undoMerge: (index) => {
+    const { baseModel, merges, fileName, focalPersonId, detailPersonId, mapAncestorId, viewOptions } =
+      get();
+    if (!baseModel) return;
+    const nextMerges = merges.filter((_, i) => i !== index);
+    const model = applyMerges(baseModel, nextMerges);
+    const graph = buildGraph(model);
+    saveMerges(fileName, nextMerges);
+
+    const focal = survivorOf(focalPersonId, nextMerges, model) ?? focalPersonId;
+    set({
+      model,
+      graph,
+      merges: nextMerges,
+      selectedIds: [],
+      highlight: null,
+      detailPersonId: survivorOf(detailPersonId, nextMerges, model),
+      mapAncestorId:
+        mapAncestorId && model.persons.has(mapAncestorId) ? mapAncestorId : null,
+      notice: 'Merge undone.',
+      ...(focal && model.persons.has(focal)
+        ? { focalPersonId: focal, ...deriveFocalState(graph, model, focal, viewOptions) }
+        : {}),
+    });
+  },
+
   setMapAncestor: (personId) => set({ mapAncestorId: personId }),
 
   search: (query) => {

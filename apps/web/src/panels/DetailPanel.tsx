@@ -1,4 +1,4 @@
-import { describeRelationship, personSketch } from '@genealogy/core';
+import { describeRelationship, personSketch, militaryServiceRecords } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
@@ -122,6 +122,38 @@ function BioSketch({ personId }: { personId: string }) {
   );
 }
 
+// Standardized military service (#10): branch / unit / rank / war / dates pulled
+// from the person's military events, raw description preserved beneath.
+function MilitarySection({ personId }: { personId: string }) {
+  const model = useStore((s) => s.model);
+  if (!model) return null;
+  const records = militaryServiceRecords(model, personId);
+  if (records.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Military service
+      </div>
+      <ul className="mt-1 space-y-1">
+        {records.map((r, i) => {
+          const headline = [r.rank, r.unit].filter(Boolean).join(', ');
+          return (
+            <li key={r.eventId ?? i} className="text-sm text-gray-700">
+              <span className="font-medium">{headline || r.war || 'Military'}</span>
+              {r.branch && <span> · {r.branch}</span>}
+              {r.war && headline && <span className="text-gray-500"> — {r.war}</span>}
+              {r.serviceDates?.raw && (
+                <span className="text-gray-400"> ({r.serviceDates.raw})</span>
+              )}
+              {r.raw && <div className="text-[11px] text-gray-400">{r.raw}</div>}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 // Deep-links into external sites (Ancestry, FamilySearch, DAR), pre-filled from
 // the person's known facts. No API — each opens a search in a new tab.
 function ResearchLinks({ personId }: { personId: string }) {
@@ -239,6 +271,8 @@ export function DetailPanel() {
       </div>
 
       <ResearchLinks personId={person.id} />
+
+      <MilitarySection personId={person.id} />
 
       {events.length > 0 && (
         <div className="mt-2">

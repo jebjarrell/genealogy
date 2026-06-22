@@ -100,6 +100,14 @@ person, and renders the ego network. Sample fixtures live in
 - **Family** (the analytics view): switch to **Family** for statistics across your direct
   ancestors — count & generation depth, longevity, most common birthplaces, average family
   size, and military service by war. Computed entirely from your file; no LLM.
+- **Military service** detail: a person's military events are standardized into branch / unit /
+  rank / war / dates in the detail panel (raw text preserved beneath).
+- **Merge duplicates** (non-destructive): select **two** people, click **Merge 2**, pick which
+  record survives, and confirm from the before→after preview. Links move over and duplicates
+  are removed. Your original file is never modified — merges are an op-log replayed on top.
+- **Review** (the edit view): switch to **Review** to see every merge, **undo** any of them, and
+  **export** the current (merged) data as GEDCOM (derived) or JSON (lossless). Merges persist
+  per file across reloads.
 - **Collapsible panels**: collapse the side panels to give the graph/map room.
 - **Data notes**: parse warnings and any path-enumeration truncation are surfaced in a
   dismissible panel — a malformed file still produces a usable graph.
