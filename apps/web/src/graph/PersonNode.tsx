@@ -9,10 +9,17 @@ import { lifeSpan, primaryName, primaryPlace } from './personDisplay.js';
 export function PersonNode({ data }: NodeProps<PersonFlowNode>) {
   const model = useStore((s) => s.model);
   const expand = useStore((s) => s.expand);
+  const orientation = useStore((s) => s.settings.orientation);
   const { person, isFocal, isPedigreeCollapsePoint, hasUnexpandedNeighbors } = data;
 
   const span = model ? lifeSpan(person, model) : '';
   const place = model ? primaryPlace(person, model) : '';
+
+  // Handles follow the layout direction so parent→child edges stay clean when
+  // the pedigree is rotated portrait↔landscape (handoff §6).
+  const horizontal = orientation === 'horizontal';
+  const targetPos = horizontal ? Position.Left : Position.Top;
+  const sourcePos = horizontal ? Position.Right : Position.Bottom;
 
   const border = data.isHighlighted
     ? 'border-red-500 ring-2 ring-red-300'
@@ -32,19 +39,29 @@ export function PersonNode({ data }: NodeProps<PersonFlowNode>) {
       style={{ width: 190, height: 76 }}
       title={person.names.map((n) => n.raw).join(' • ')}
     >
-      <Handle type="target" position={Position.Top} className="!bg-gray-400" />
+      <Handle type="target" position={targetPos} className="!bg-gray-400" />
       <div className="flex items-start justify-between gap-1">
         <div className="truncate text-sm font-semibold text-gray-900">
           {primaryName(person)}
         </div>
-        {isPedigreeCollapsePoint && (
-          <span
-            className="shrink-0 rounded-full bg-amber-100 px-1 text-[10px] font-bold text-amber-700"
-            title="Pedigree-collapse point — related to the focal person more than one way"
-          >
-            ⚭
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-0.5">
+          {person.userSupplied && (
+            <span
+              className="rounded-full bg-violet-100 px-1 text-[10px] font-bold text-violet-700"
+              title="User-supplied — added or edited by you"
+            >
+              ✎
+            </span>
+          )}
+          {isPedigreeCollapsePoint && (
+            <span
+              className="rounded-full bg-amber-100 px-1 text-[10px] font-bold text-amber-700"
+              title="Pedigree-collapse point — related to the focal person more than one way"
+            >
+              ⚭
+            </span>
+          )}
+        </div>
       </div>
       <div className="mt-0.5 truncate text-xs text-gray-600">{span || '—'}</div>
       {place && <div className="truncate text-[11px] text-gray-400">{place}</div>}
@@ -65,7 +82,7 @@ export function PersonNode({ data }: NodeProps<PersonFlowNode>) {
           +
         </button>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-gray-400" />
+      <Handle type="source" position={sourcePos} className="!bg-gray-400" />
     </div>
   );
 }

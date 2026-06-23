@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from './state/store.js';
 import { UploadButton } from './upload/UploadButton.js';
 import { GraphCanvas } from './graph/GraphCanvas.js';
@@ -13,9 +13,14 @@ import { MapView } from './map/MapView.js';
 import { FamilyPanel } from './panels/FamilyPanel.js';
 import { ReviewPanel } from './panels/ReviewPanel.js';
 import { MergeConfirm } from './panels/MergeConfirm.js';
+import { SarPanel } from './panels/SarPanel.js';
+import { VaultPanel } from './panels/VaultPanel.js';
+import { PersonEditor } from './panels/PersonEditor.js';
+import { EventEditor } from './panels/EventEditor.js';
+import { WorkspaceModal } from './panels/WorkspaceModal.js';
 
 type LeftTab = 'search' | 'collapse';
-type MainView = 'graph' | 'map' | 'family' | 'review';
+type MainView = 'graph' | 'map' | 'family' | 'sar' | 'vault' | 'review';
 
 /** Boolean UI state persisted to localStorage so panel layout survives reloads. */
 function usePersisted(key: string, initial: boolean) {
@@ -62,10 +67,22 @@ function CollapsibleSection({
   );
 }
 
+const TABS: { id: MainView; label: string; title: string }[] = [
+  { id: 'graph', label: 'Graph', title: 'Interactive ego-centric pedigree' },
+  { id: 'map', label: 'Map', title: 'Migration map for an ancestral line' },
+  { id: 'family', label: 'Family', title: 'Family statistics across your ancestors' },
+  { id: 'sar', label: 'SAR', title: 'SAR proof checklist + evidence linking' },
+  { id: 'vault', label: 'Vault', title: 'Your document vault' },
+  { id: 'review', label: 'Review', title: 'Edit history, export, and locality report' },
+];
+
 export function App() {
   const model = useStore((s) => s.model);
   const fileName = useStore((s) => s.fileName);
+  const projectName = useStore((s) => s.projectName);
+  const workspaceName = useStore((s) => s.workspaceName);
   const openFocalPicker = useStore((s) => s.openFocalPicker);
+  const restoreWorkspace = useStore((s) => s.restoreWorkspace);
   const focalName = useStore((s) => {
     if (!s.model || !s.focalPersonId) return null;
     return s.model.persons.get(s.focalPersonId)?.names[0]?.full ?? s.focalPersonId;
@@ -74,62 +91,61 @@ export function App() {
   const [leftOpen, setLeftOpen] = usePersisted('ui:leftOpen', true);
   const [rightOpen, setRightOpen] = usePersisted('ui:rightOpen', true);
   const [mainView, setMainView] = useState<MainView>('graph');
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+
+  // Re-bind a previously-connected workspace folder on load (no-op without one).
+  useEffect(() => {
+    void restoreWorkspace();
+  }, [restoreWorkspace]);
 
   return (
     <div className="flex h-full flex-col bg-gray-100 text-gray-900">
       <header className="flex items-center justify-between border-b border-gray-300 bg-white px-4 py-2">
         <div>
           <h1 className="text-base font-bold">Genealogy Knowledge Graph Viewer</h1>
-          {fileName && (
-            <div className="text-xs text-gray-500">
-              {fileName}
-              {focalName && (
-                <>
-                  {' · focal: '}
-                  <button
-                    className="font-medium text-blue-700 hover:underline"
-                    onClick={openFocalPicker}
-                    title="Change focal person"
-                  >
-                    {focalName} ✎
-                  </button>
-                </>
-              )}
-            </div>
-          )}
+          <div className="text-xs text-gray-500">
+            {projectName && <span className="font-medium text-gray-700">{projectName} · </span>}
+            {fileName}
+            {focalName && (
+              <>
+                {' · focal: '}
+                <button
+                  className="font-medium text-blue-700 hover:underline"
+                  onClick={openFocalPicker}
+                  title="Change focal person"
+                >
+                  {focalName} ✎
+                </button>
+              </>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {model && (
             <div className="flex overflow-hidden rounded border border-gray-300 text-sm">
-              <button
-                className={`px-3 py-1 ${mainView === 'graph' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
-                onClick={() => setMainView('graph')}
-              >
-                Graph
-              </button>
-              <button
-                className={`px-3 py-1 ${mainView === 'map' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
-                onClick={() => setMainView('map')}
-                title="Migration map for an ancestral line"
-              >
-                Map
-              </button>
-              <button
-                className={`px-3 py-1 ${mainView === 'family' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
-                onClick={() => setMainView('family')}
-                title="Family statistics across your ancestors"
-              >
-                Family
-              </button>
-              <button
-                className={`px-3 py-1 ${mainView === 'review' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-gray-100'}`}
-                onClick={() => setMainView('review')}
-                title="Review merges and export your data"
-              >
-                Review
-              </button>
+              {TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  className={`px-3 py-1 ${
+                    mainView === tab.id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white hover:bg-gray-100'
+                  }`}
+                  onClick={() => setMainView(tab.id)}
+                  title={tab.title}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           )}
+          <button
+            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
+            onClick={() => setWorkspaceOpen(true)}
+            title="Workspace and projects"
+          >
+            {workspaceName ? `📁 ${workspaceName}` : '📁 Workspace'}
+          </button>
           <UploadButton />
         </div>
       </header>
@@ -138,10 +154,19 @@ export function App() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
           <p className="max-w-md text-gray-600">
             Load a GEDCOM (<code>.ged</code>) file to explore your family tree as an
-            interactive, ego-centric graph — with pedigree-collapse detection. Parsing
-            happens entirely in your browser; the file never leaves your machine.
+            interactive, ego-centric graph — with pedigree-collapse detection, manual
+            editing, a document vault, and an SAR proof checklist. Everything happens in your
+            browser; your files stay on your machine.
           </p>
-          <UploadButton />
+          <div className="flex items-center gap-2">
+            <UploadButton />
+            <button
+              className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
+              onClick={() => setWorkspaceOpen(true)}
+            >
+              Open a project…
+            </button>
+          </div>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
@@ -189,6 +214,8 @@ export function App() {
             )}
             {mainView === 'map' && <MapView />}
             {mainView === 'family' && <FamilyPanel />}
+            {mainView === 'sar' && <SarPanel />}
+            {mainView === 'vault' && <VaultPanel />}
             {mainView === 'review' && <ReviewPanel />}
             <DataNotes />
           </main>
@@ -224,6 +251,9 @@ export function App() {
 
       <FocalPicker />
       <MergeConfirm />
+      <PersonEditor />
+      <EventEditor />
+      {workspaceOpen && <WorkspaceModal onClose={() => setWorkspaceOpen(false)} />}
     </div>
   );
 }

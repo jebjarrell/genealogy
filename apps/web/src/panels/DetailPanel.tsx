@@ -1,5 +1,6 @@
 import { describeRelationship, personSketch, militaryServiceRecords } from '@genealogy/core';
 import { useStore } from '../state/store.js';
+import { useEditorStore } from '../state/editorStore.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
 import {
@@ -211,6 +212,10 @@ export function DetailPanel() {
   const focalPersonId = useStore((s) => s.focalPersonId);
   const setFocal = useStore((s) => s.setFocal);
   const expand = useStore((s) => s.expand);
+  const openEditPerson = useEditorStore((s) => s.openEditPerson);
+  const openAddPerson = useEditorStore((s) => s.openAddPerson);
+  const openAddEvent = useEditorStore((s) => s.openAddEvent);
+  const openEditEvent = useEditorStore((s) => s.openEditEvent);
 
   if (!model || !graph || !detailPersonId) {
     return <p className="p-3 text-sm text-gray-400">Select a person to see details.</p>;
@@ -226,7 +231,17 @@ export function DetailPanel() {
   return (
     <div className="space-y-2 p-3">
       <div>
-        <h2 className="text-lg font-bold text-gray-900">{primaryName(person)}</h2>
+        <h2 className="flex items-center gap-2 text-lg font-bold text-gray-900">
+          {primaryName(person)}
+          {person.userSupplied && (
+            <span
+              className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-700"
+              title="Added or edited by you — not from the original GEDCOM"
+            >
+              user-supplied
+            </span>
+          )}
+        </h2>
         {person.names.length > 1 && (
           <div className="text-xs text-gray-500">
             also:{' '}
@@ -270,6 +285,39 @@ export function DetailPanel() {
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-1 border-t border-gray-100 pt-2">
+        <button
+          className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+          onClick={() => openEditPerson(person.id)}
+        >
+          ✎ Edit
+        </button>
+        <button
+          className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+          onClick={() => openAddEvent(person.id)}
+        >
+          + Event
+        </button>
+        <button
+          className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+          onClick={() => openAddPerson({ relation: 'parent', personId: person.id })}
+        >
+          + Parent
+        </button>
+        <button
+          className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+          onClick={() => openAddPerson({ relation: 'child', personId: person.id })}
+        >
+          + Child
+        </button>
+        <button
+          className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+          onClick={() => openAddPerson({ relation: 'spouse', personId: person.id })}
+        >
+          + Spouse
+        </button>
+      </div>
+
       <ResearchLinks personId={person.id} />
 
       <MilitarySection personId={person.id} />
@@ -281,7 +329,7 @@ export function DetailPanel() {
           </div>
           <ul className="mt-1 space-y-1">
             {events.map((e) => (
-              <li key={e.id} className="text-sm text-gray-700">
+              <li key={e.id} className="group text-sm text-gray-700">
                 <span className="font-medium">{EVENT_LABELS[e.type] ?? e.type}</span>
                 {e.date && <span> · {e.date.raw}</span>}
                 {e.place && (
@@ -290,6 +338,18 @@ export function DetailPanel() {
                     · {e.place.raw} <PlaceResolveButton place={e.place} />
                   </span>
                 )}
+                {e.userSupplied && (
+                  <span className="ml-1 text-[10px] font-semibold uppercase text-violet-600">
+                    edited
+                  </span>
+                )}
+                <button
+                  className="ml-1 text-[11px] text-violet-600 opacity-0 hover:underline group-hover:opacity-100"
+                  onClick={() => openEditEvent(person.id, e.id)}
+                  title="Edit this event"
+                >
+                  ✎
+                </button>
                 {e.sources.length > 0 && (
                   <div className="text-[11px] text-gray-400">
                     source: {e.sources.map((s) => s.page ?? s.raw).join('; ')}

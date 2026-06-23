@@ -45,32 +45,38 @@ describe('app store — merge edit layer', () => {
     const s = useStore.getState();
     expect(s.model!.persons.has('I3DUP')).toBe(false);
     expect(s.model!.persons.size).toBe(3);
-    expect(s.merges).toHaveLength(1);
+    expect(s.ops).toHaveLength(1);
+    expect(s.ops[0]!.kind).toBe('merge');
     expect(s.baseModel!.persons.has('I3DUP')).toBe(true); // pristine untouched
   });
 
-  it('persists merges and replays them on reload', () => {
+  it('persists the op-log and replays it on reload', () => {
     load();
     useStore.getState().setFocal('I1');
     useStore.getState().mergePeople('I3', 'I3DUP');
-    expect(localStorage.getItem('genealogy:merges:merge.ged')).toContain('I3DUP');
+    expect(localStorage.getItem('genealogy:ops:merge.ged')).toContain('I3DUP');
 
-    // Reload the same file: the persisted merge should replay.
+    // Reload the same file: the persisted op should replay.
     load();
     const s = useStore.getState();
-    expect(s.merges).toHaveLength(1);
+    expect(s.ops).toHaveLength(1);
     expect(s.model!.persons.has('I3DUP')).toBe(false);
   });
 
-  it('undo restores the merged-away record', () => {
+  it('undo restores the merged-away record; redo re-applies it', () => {
     load();
     useStore.getState().setFocal('I1');
     useStore.getState().mergePeople('I3', 'I3DUP');
     useStore.getState().undoMerge(0);
-    const s = useStore.getState();
-    expect(s.merges).toHaveLength(0);
+    let s = useStore.getState();
+    expect(s.ops).toHaveLength(0);
     expect(s.model!.persons.has('I3DUP')).toBe(true);
-    expect(localStorage.getItem('genealogy:merges:merge.ged')).toBe('[]');
+    expect(localStorage.getItem('genealogy:ops:merge.ged')).toBe('[]');
+
+    useStore.getState().redo();
+    s = useStore.getState();
+    expect(s.ops).toHaveLength(1);
+    expect(s.model!.persons.has('I3DUP')).toBe(false);
   });
 
   it('remaps the focal person when it is merged away', () => {

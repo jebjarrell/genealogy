@@ -19,6 +19,7 @@ export function GraphCanvas() {
   const selectedIds = useStore((s) => s.selectedIds);
   const highlight = useStore((s) => s.highlight);
   const showMarriageEdges = useStore((s) => s.viewOptions.showMarriageEdges);
+  const orientation = useStore((s) => s.settings.orientation);
   const selectPerson = useStore((s) => s.selectPerson);
   const expand = useStore((s) => s.expand);
 
@@ -35,8 +36,8 @@ export function GraphCanvas() {
       highlightedEdgeKeys: highlight?.edgeKeys,
       dimUnhighlighted: highlight !== null,
     });
-    return { nodes: layout(flow.nodes, flow.edges), edges: flow.edges };
-  }, [view, selectedIds, highlight, showMarriageEdges]);
+    return { nodes: layout(flow.nodes, flow.edges, orientation), edges: flow.edges };
+  }, [view, selectedIds, highlight, showMarriageEdges, orientation]);
 
   const onNodeClick: NodeMouseHandler = (_e, node) => selectPerson(node.id);
   // Double-click extends the pedigree (parents only) — keeps the graph to direct
@@ -45,6 +46,8 @@ export function GraphCanvas() {
 
   return (
     <ReactFlow
+      // Remount on rotation so the view refits to the re-laid-out graph.
+      key={orientation}
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}

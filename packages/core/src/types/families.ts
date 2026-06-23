@@ -10,4 +10,6 @@ export interface Family {
   spouseIds: string[];
   childIds: string[];
   marriageEventIds: string[];
+  /** True when created by the user (edit layer); never set by the parser. */
+  userSupplied?: boolean;
 }
