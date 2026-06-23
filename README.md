@@ -6,8 +6,12 @@ you can explore. Its defining capability is showing **multiple distinct relation
 paths between the same two people** — _pedigree collapse_: the different ways a single
 ancestor is related to you.
 
-Everything runs client-side. The file never leaves your machine. This is a **read-only
-viewer**; it never edits or writes back to the tree.
+Everything runs client-side. The file never leaves your machine. Beyond viewing, it now
+also supports **non-destructive manual editing**, **folder-backed projects + a document
+vault** (File System Access API), a **locality research report**, an **SAR proof
+checklist with evidence linking**, and a **rotatable pedigree** — all preserving the
+original parsed data (every edit is an op replayed over the pristine model and is
+reversible).
 
 > Build specification: [`TRD.md`](./TRD.md). The TRD is the source of truth.
 
@@ -34,6 +38,52 @@ apps/web        @genealogy/web     React + Vite + React Flow UI. Depends on core
 The first boundary is **enforced by lint in CI**: any `fetch`, DOM global, Node built-in,
 or rendering-library import inside `@genealogy/core` fails the build. The core test suite
 runs under **Node**, proving the same logic is portable to a non-browser environment.
+
+---
+
+## Editing, projects, vault, SAR & locality
+
+These build on the seams above without crossing them — all data logic lives in pure core;
+File System Access lives only in the UI (`apps/web/src/fs`).
+
+- **Manual editing (op-log).** Add/edit people, events, and parent/child/spouse links, and
+  merge duplicates. Every change is an `EditOp` appended to one op-log and **replayed over
+  the pristine parsed model** (`applyOps`) — originals are never mutated, manual entries are
+  flagged `userSupplied`, and the Review tab gives **undo/redo**. Replaying the op-log from
+  the base model always reproduces the exact current state (an asserted test).
+- **Persistent projects (File System Access API).** Bind a real workspace folder; each
+  project is a folder holding its GEDCOM source, op-log, SAR checklists, focal choice, and
+  settings. Create / open / rename / delete; autosave is crash-safe (temp-then-promote).
+- **Global document vault.** Add PDF/JPG/PNG; documents are **content-hash deduplicated**
+  and shared across projects, so one certificate can back checklist items in many projects.
+- **Locality research report.** For a traced line (focal → chosen ancestor) it consumes the
+  **enumerated ancestral paths** (so pedigree collapse is never double-counted) and pivots
+  every fact **place → year → person** with a `sourced`/`unsourced`/`none` citation status.
+  The gaps are the research to-do list. Exportable as Markdown.
+- **SAR proof checklist.** Pick a patriot ancestor; the child→parent links (from an
+  enumerated path) plus the patriot's service item are tracked with three-state proof. A
+  record copy (prior SAR/DAR application) can span multiple generations and must be
+  **approved on/after 1 Jan 1985** to count; the tie-in stored is the **national number +
+  patriot name**. Unproven links hand off to the locality report. SAR date/place formatting
+  (`04 Jul 1776`, `City/County/ST`) is applied in context. Lineage stops at the patriot.
+- **Pedigree rotation.** Toggle portrait↔landscape (dagre `TB`↔`LR`); the choice is saved in
+  project settings and all interactions/highlighting hold in both.
+
+### On-disk layout of a workspace
+
+```
+<workspace root>/
+  projects/
+    <project-name>/
+      source.ged       # the GEDCOM source (self-contained project)
+      project.json     # focal choice, op-log, SAR checklists, settings
+  vault/
+    documents/         # the actual PDF/JPG/PNG files, named <sha256>.<ext>
+    vault-index.json   # manifest: docId → {filename, hash, mimetype, citationLinks[]}
+```
+
+> Folder-backed projects need a Chromium-based browser (File System Access API). Without it,
+> the app still works and persists per-file to `localStorage`.
 
 ---
 

@@ -14,7 +14,8 @@ export function UploadButton() {
     setBusy(true);
     try {
       const bytes = await readFileAsBytes(file);
-      loadModel(parseGedcom(bytes), file.name);
+      // Pass the raw bytes too so the file can be saved as a folder-backed project.
+      loadModel(parseGedcom(bytes), file.name, bytes);
     } finally {
       setBusy(false);
     }
@@ -42,7 +43,11 @@ export function UploadButton() {
       <button
         className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
         onClick={() =>
-          loadModel(parseGedcom(sampleGed), 'pedigree-collapse.ged (sample)')
+          loadModel(
+            parseGedcom(sampleGed),
+            'pedigree-collapse.ged (sample)',
+            new TextEncoder().encode(sampleGed),
+          )
         }
       >
         Load sample

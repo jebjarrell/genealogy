@@ -11,6 +11,8 @@ export function ViewControls() {
   const clearHighlight = useStore((s) => s.clearHighlight);
   const selectedIds = useStore((s) => s.selectedIds);
   const openMerge = useStore((s) => s.openMerge);
+  const orientation = useStore((s) => s.settings.orientation);
+  const setOrientation = useStore((s) => s.setOrientation);
 
   const toggle = (key: 'includeSpouses' | 'showMarriageEdges' | 'showSiblings') =>
     setViewOptions({ [key]: !viewOptions[key] });
@@ -76,6 +78,16 @@ export function ViewControls() {
       >
         Marriage links
       </Chip>
+      <span className="mx-1 h-4 w-px bg-gray-200" />
+      <button
+        className="rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+        onClick={() =>
+          setOrientation(orientation === 'vertical' ? 'horizontal' : 'vertical')
+        }
+        title="Rotate the pedigree between portrait and landscape"
+      >
+        {orientation === 'vertical' ? '⤡ Landscape' : '⤢ Portrait'}
+      </button>
       <span className="mx-1 h-4 w-px bg-gray-200" />
       {selectedIds.length === 2 && (
         <button

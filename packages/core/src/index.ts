@@ -22,6 +22,7 @@ export { computeGenerations } from './graph/generations.js';
 export {
   enumeratePaths,
   enumerateRelationshipPaths,
+  enumerateAncestralPaths,
   DEFAULT_MAX_PATHS,
   DEFAULT_MAX_DEPTH,
 } from './graph/paths.js';
@@ -64,6 +65,51 @@ export type { MilitaryServiceRecord } from './military/standardize.js';
 // ---- Edit layer: non-destructive person merge (op-log overlay) -----------
 export { mergePersons, applyMerges } from './edit/merge.js';
 export type { MergeOp } from './edit/merge.js';
+
+// ---- Edit layer: unified op-log (merge + manual add/edit; op-log fidelity) ----
+export { applyOp, applyOps } from './edit/ops.js';
+export type {
+  EditOp,
+  MergeEditOp,
+  AddPersonOp,
+  EditPersonOp,
+  AddEventOp,
+  EditEventOp,
+  LinkRelationshipOp,
+  UnlinkRelationshipOp,
+} from './edit/ops.js';
+
+// ---- SAR proof checklist + lineage-society rules + SAR formatting ----------
+export { SAR_RULES, SOCIETY_RULES } from './sar/rules.js';
+export type { SocietyRules, ProofStatus } from './sar/rules.js';
+export {
+  SERVICE_KEY,
+  linkKey,
+  serviceCitation,
+  generateChecklistStructure,
+  evaluateChecklist,
+} from './sar/checklist.js';
+export type {
+  LineageLink,
+  ChecklistStructure,
+  DocumentProof,
+  RecordCopyProof,
+  Proof,
+  RecordCopyRef,
+  LinkEvaluation,
+  ServiceEvaluation,
+  ChecklistEvaluation,
+} from './sar/checklist.js';
+export { formatSarDate, formatSarPlace, toStateAbbr } from './sar/format.js';
+
+// ---- Locality research report (where to dig next; collapse-safe) -----------
+export { buildLocalityReport, localityReportToMarkdown } from './research/locality.js';
+export type {
+  CitationStatus,
+  LocalityFact,
+  LocalityRow,
+  LocalityReport,
+} from './research/locality.js';
 
 // ---- Data export (derived GEDCOM + lossless JSON) ------------------------
 export { writeGedcom } from './export/gedcom.js';

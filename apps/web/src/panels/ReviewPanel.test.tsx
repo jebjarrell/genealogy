@@ -42,14 +42,14 @@ describe('ReviewPanel + MergeConfirm render', () => {
   it('lists an applied merge with an undo control and export buttons', () => {
     useStore.getState().mergePeople('I3', 'I3DUP');
     render(<ReviewPanel />);
-    expect(screen.getByText(/Merges \(1\)/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Undo/i })).toBeInTheDocument();
+    expect(screen.getByText(/Edit history \(1\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Undo$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Export GEDCOM/i })).toBeInTheDocument();
   });
 
-  it('shows the empty state before any merge', () => {
+  it('shows the empty state before any edit', () => {
     render(<ReviewPanel />);
-    expect(screen.getByText(/No merges yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No edits yet/i)).toBeInTheDocument();
   });
 
   it('previews a merge when two people are selected', () => {

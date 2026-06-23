@@ -112,3 +112,62 @@ export function enumeratePaths(
 ): Path[] {
   return enumerateRelationshipPaths(graph, fromId, toId, options).paths;
 }
+
+/**
+ * Enumerate every distinct simple ANCESTRAL (upward-only) path from `fromId` to a
+ * specific `ancestorId` — i.e. a direct line of descent, child → parent at every
+ * step. Unlike {@link enumerateRelationshipPaths} this never turns downward, so a
+ * cousin marriage cannot reach the target by descending through a shared root.
+ * This is the correct primitive for a lineage to a chosen ancestor (a "traced
+ * line"); pedigree collapse appears here as multiple reconverging upward paths,
+ * which callers deduplicate. Guarded against blow-up by the same caps.
+ */
+export function enumerateAncestralPaths(
+  graph: Graph,
+  fromId: string,
+  ancestorId: string,
+  options?: EnumeratePathsOptions,
+): PathEnumeration {
+  const maxPaths = options?.maxPaths ?? DEFAULT_MAX_PATHS;
+  const maxDepth = options?.maxDepth ?? DEFAULT_MAX_DEPTH;
+  const paths: Path[] = [];
+  let truncated = false;
+
+  if (fromId === ancestorId) return { paths, truncated };
+
+  const visited = new Set<string>();
+  const trail: string[] = [];
+
+  const visit = (node: string): void => {
+    if (paths.length >= maxPaths) {
+      truncated = true;
+      return;
+    }
+    visited.add(node);
+    trail.push(node);
+
+    if (node === ancestorId) {
+      paths.push(trailToPath(trail));
+      trail.pop();
+      visited.delete(node);
+      return;
+    }
+
+    if (trail.length - 1 >= maxDepth) {
+      truncated = true;
+      trail.pop();
+      visited.delete(node);
+      return;
+    }
+
+    for (const parent of graph.parentsOf.get(node) ?? []) {
+      if (!visited.has(parent)) visit(parent);
+    }
+
+    trail.pop();
+    visited.delete(node);
+  };
+
+  visit(fromId);
+  return { paths, truncated };
+}

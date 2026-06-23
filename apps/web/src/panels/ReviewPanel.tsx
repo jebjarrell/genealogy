@@ -1,34 +1,51 @@
-import { writeGedcom, exportModelJson } from '@genealogy/core';
+import { useState } from 'react';
+import { writeGedcom, exportModelJson, type EditOp } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { primaryName } from '../graph/personDisplay.js';
+import { triggerDownload } from '../export/download.js';
+import { LocalityReport } from './LocalityReport.js';
 
-// "Review" tab: the edit history. Lists applied merges (newest first) with undo,
-// and exports the current (merged) data — derived GEDCOM + lossless JSON.
-
-function triggerDownload(filename: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+// "Review" tab: the unified edit history (merges + manual add/edit) with undo and
+// redo, data export (derived GEDCOM + lossless JSON — both now include manual
+// edits, since they serialize the replayed model), and the locality research
+// report export.
 
 function baseName(fileName: string | null): string {
   if (!fileName) return 'genealogy';
   return fileName.replace(/\.[^.]+$/, '');
 }
 
+function describeOp(op: EditOp, nameOf: (id: string) => string): string {
+  switch (op.kind) {
+    case 'merge':
+      return `Merged ${nameOf(op.keepId)} ← ${nameOf(op.mergeId)}`;
+    case 'addPerson':
+      return `Added person ${op.nameRaws[0]?.replace(/\//g, '') ?? '(unnamed)'}`;
+    case 'editPerson':
+      return `Edited ${nameOf(op.personId)}`;
+    case 'addEvent':
+      return `Added ${op.eventType} event`;
+    case 'editEvent':
+      return `Edited an event`;
+    case 'linkRelationship':
+      return `Linked ${op.relation === 'spouse' ? 'spouses' : 'parent–child'}`;
+    case 'unlinkRelationship':
+      return `Unlinked ${op.relation === 'spouse' ? 'spouses' : 'parent–child'}`;
+  }
+}
+
 export function ReviewPanel() {
   const model = useStore((s) => s.model);
   const baseModel = useStore((s) => s.baseModel);
-  const merges = useStore((s) => s.merges);
+  const ops = useStore((s) => s.ops);
+  const redoStack = useStore((s) => s.redoStack);
   const fileName = useStore((s) => s.fileName);
-  const undoMerge = useStore((s) => s.undoMerge);
+  const undoOp = useStore((s) => s.undoOp);
+  const redo = useStore((s) => s.redo);
   const selectPerson = useStore((s) => s.selectPerson);
+  const collapsePoints = useStore((s) => s.collapsePoints);
+  const focalPersonId = useStore((s) => s.focalPersonId);
+  const [reportAncestor, setReportAncestor] = useState<string>('');
 
   if (!model || !baseModel) {
     return (
@@ -39,9 +56,12 @@ export function ReviewPanel() {
   }
 
   const nameOf = (id: string): string => {
-    const p = baseModel.persons.get(id) ?? model.persons.get(id);
+    const p = model.persons.get(id) ?? baseModel.persons.get(id);
     return p ? primaryName(p) : id;
   };
+
+  // Candidate ancestors for a locality report: collapse points + direct ancestors.
+  const ancestorChoices = collapsePoints.map((c) => c.ancestorId);
 
   return (
     <div className="h-full overflow-y-auto bg-gray-100 p-4">
@@ -50,8 +70,8 @@ export function ReviewPanel() {
           <div>
             <h2 className="text-lg font-bold text-gray-900">Review &amp; export</h2>
             <p className="text-sm text-gray-500">
-              Merges are non-destructive — your original file is untouched and every
-              merge is reversible.
+              Every edit is non-destructive — your original file is untouched and all
+              edits are reversible.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -59,7 +79,7 @@ export function ReviewPanel() {
               className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700"
               onClick={() =>
                 triggerDownload(
-                  `${baseName(fileName)}-merged.ged`,
+                  `${baseName(fileName)}-edited.ged`,
                   writeGedcom(model),
                   'text/plain;charset=utf-8',
                 )
@@ -71,7 +91,7 @@ export function ReviewPanel() {
               className="rounded border border-gray-300 bg-white px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50"
               onClick={() =>
                 triggerDownload(
-                  `${baseName(fileName)}-merged.json`,
+                  `${baseName(fileName)}-edited.json`,
                   exportModelJson(model),
                   'application/json',
                 )
@@ -83,23 +103,32 @@ export function ReviewPanel() {
         </div>
 
         <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
-          GEDCOM export is <strong>derived</strong>: it reflects the fields this app models
-          (names, sex, events, family links, notes). Custom/unmodeled tags from the original
-          file are not preserved. The JSON export is lossless for this app.
+          GEDCOM export is <strong>derived</strong> (modeled fields only) and now includes
+          your manual additions and edits. The JSON export is lossless for this app.
         </p>
 
+        {/* ---- Edit history ---- */}
         <div>
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">
-            Merges ({merges.length})
-          </h3>
-          {merges.length === 0 ? (
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">
+              Edit history ({ops.length})
+            </h3>
+            <button
+              className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+              disabled={redoStack.length === 0}
+              onClick={() => redo()}
+            >
+              Redo
+            </button>
+          </div>
+          {ops.length === 0 ? (
             <p className="rounded border border-dashed border-gray-300 p-4 text-sm text-gray-500">
-              No merges yet. Select two people in the graph, then choose{' '}
-              <span className="font-medium">Merge</span> to combine duplicate records.
+              No edits yet. Merge duplicates, or add/edit people from the graph and detail
+              panel — everything appears here and can be undone.
             </p>
           ) : (
             <ul className="space-y-2">
-              {merges
+              {ops
                 .map((op, index) => ({ op, index }))
                 .reverse()
                 .map(({ op, index }) => (
@@ -109,13 +138,19 @@ export function ReviewPanel() {
                   >
                     <div className="min-w-0">
                       <div className="truncate text-gray-800">
-                        <button
-                          className="font-medium text-blue-700 hover:underline"
-                          onClick={() => selectPerson(op.keepId)}
-                        >
-                          {nameOf(op.keepId)}
-                        </button>{' '}
-                        <span className="text-gray-400">←</span> {nameOf(op.mergeId)}
+                        {op.kind === 'merge' ? (
+                          <>
+                            <button
+                              className="font-medium text-blue-700 hover:underline"
+                              onClick={() => selectPerson(op.keepId)}
+                            >
+                              {nameOf(op.keepId)}
+                            </button>{' '}
+                            <span className="text-gray-400">←</span> {nameOf(op.mergeId)}
+                          </>
+                        ) : (
+                          describeOp(op, nameOf)
+                        )}
                       </div>
                       <div className="text-[11px] text-gray-400">
                         {new Date(op.at).toLocaleString()}
@@ -123,13 +158,50 @@ export function ReviewPanel() {
                     </div>
                     <button
                       className="shrink-0 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-                      onClick={() => undoMerge(index)}
+                      onClick={() => undoOp(index)}
                     >
                       Undo
                     </button>
                   </li>
                 ))}
             </ul>
+          )}
+        </div>
+
+        {/* ---- Locality research report ---- */}
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-gray-700">
+            Locality research report
+          </h3>
+          {!focalPersonId ? (
+            <p className="text-sm text-gray-500">Choose a focal person first.</p>
+          ) : (
+            <>
+              <div className="mb-2 flex items-center gap-2">
+                <label className="text-xs text-gray-500">Trace the line to:</label>
+                <select
+                  className="rounded border border-gray-300 px-2 py-1 text-sm"
+                  value={reportAncestor}
+                  onChange={(e) => setReportAncestor(e.target.value)}
+                >
+                  <option value="">Select an ancestor…</option>
+                  {ancestorChoices.map((id) => (
+                    <option key={id} value={id}>
+                      {nameOf(id)} {collapsePoints.some((c) => c.ancestorId === id) ? '(collapse point)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {reportAncestor ? (
+                <LocalityReport ancestorId={reportAncestor} />
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Pick an ancestor to see where the sourcing gaps are along that line.
+                  Collapse-point ancestors are listed; the report consumes the enumerated
+                  paths, so braided lines are not double-counted.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

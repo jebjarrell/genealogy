@@ -29,4 +29,6 @@ export interface Event {
   participants: string[];
   description?: string;
   sources: SourceCitation[];
+  /** True when added/edited by the user (edit layer); never set by the parser. */
+  userSupplied?: boolean;
 }

@@ -24,4 +24,11 @@ export interface Person {
    * Present only on records that are the result of one or more merges.
    */
   mergedFromIds?: string[];
+  /**
+   * Provenance marker for the edit layer: true when this record was added or
+   * edited by the user (manual entry) rather than coming verbatim from the
+   * parsed GEDCOM. Drives the "user-supplied" badge in the UI. Additive: never
+   * set by the parser, only by op-log replay (TRD §1.3 extension).
+   */
+  userSupplied?: boolean;
 }
