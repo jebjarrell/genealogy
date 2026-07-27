@@ -399,6 +399,50 @@ describe('SaveScheduler', () => {
     expect(spy).toHaveBeenCalledTimes(1); // not skipped by a cache from the old store
   });
 
+  // Regression test: the conflict-detection claim, like the stored-sources
+  // cache above, must not outlive the store instance it was staked against.
+  // If the host's `session()` getter starts pointing at a different store
+  // that happens to already hold a same-named record with a different
+  // updatedAt (not a lie - just unrelated data from a different backing
+  // store), a claim carried over from the old instance would compare
+  // cleanly against data it was never staked against and misfire a
+  // conflict on a perfectly healthy single tab. Pins the `this.claim =
+  // null` line in the session-instance-change branch of runSession().
+  it('does not compare a stale claim against an unrelated session store after an instance change', async () => {
+    const conflicts: string[] = [];
+    let current: SessionStore = session;
+    const { scheduler } = make({
+      session: () => current,
+      onConflict: (name) => conflicts.push(name),
+    });
+
+    // Stake a claim for "tree" against store 1.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Store 2 already holds a record named "tree" with a different
+    // updatedAt - written independently of anything this scheduler has
+    // done, simulating a reconnect to a store this tab did not just write.
+    const store2 = new MemSessionStore();
+    await store2.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    current = store2;
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual([]);
+    // The save proceeded and landed in the new store rather than being
+    // refused - store 2's placeholder record was overwritten, not left
+    // standing as though a conflict had been detected.
+    expect((await store2.getProject('tree'))!.updatedAt).not.toBe(
+      '2099-01-01T00:00:00.000Z',
+    );
+  });
+
   // Regression test: two tabs open on the same project. Both autosave to the
   // same session-store record; without detection, last-write-wins silently
   // drops whichever tab saved second. This pins that the losing tab notices
