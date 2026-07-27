@@ -370,6 +370,63 @@ describe('renameCurrentProject', () => {
   });
 });
 
+// Final review, item 3: at the store level, a latched conflict used to leave
+// the app looking completely healthy while writing nothing anywhere. Placed
+// last in this file on purpose: the SaveScheduler is a module-level singleton
+// shared by every test here, so a test that latches a conflict has to be the
+// one that also proves the latch is retired again.
+describe('cross-tab conflict', () => {
+  let session: MemSessionStore;
+
+  beforeEach(() => {
+    useStore.setState(useStore.getInitialState(), true);
+    session = new MemSessionStore();
+    useStore.getState().setSessionStore(session);
+  });
+
+  afterEach(quiesce);
+
+  it('reports a blocked save durably, then resumes on a different project', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+
+    // Another tab saves the same record behind our back.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+
+    expect(useStore.getState().saveState.status).toBe('error');
+    expect(useStore.getState().saveState.blockedReason).toBe('conflict');
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+
+    // The notice that explains it is transient - the very next edit overwrites
+    // it - so the durable half has to survive that edit. This is the whole
+    // point of blockedReason (final review, item 4).
+    useStore.getState().editPerson('I11', { nameRaws: ['Again /Name/'], sex: 'male' });
+    expect(useStore.getState().notice).not.toContain('another tab');
+    await useStore.getState().flushSaves();
+    expect(useStore.getState().saveState.blockedReason).toBe('conflict');
+
+    // Opening another project is a different record and a fresh claim: saving
+    // must resume rather than stay silently dead for the rest of the session.
+    await useStore.getState().importGedcom(bytes(OTHER_GED), 'other.ged');
+    useStore.getState().addPerson({ nameRaws: ['New /Person/'], sex: 'female' });
+    await useStore.getState().flushSaves();
+
+    expect(useStore.getState().projectName).toBe('other');
+    expect(useStore.getState().saveState.status).toBe('saved');
+    expect(useStore.getState().saveState.blockedReason).toBeUndefined();
+    expect((await session.getProject('other'))!.ops).toHaveLength(1);
+    // ...and the contested project still belongs to the other tab.
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+});
+
 // Task 10 fix round 1, finding 2: every persistence test above proves data
 // round-trips through a SessionStore, but every one of them gets there via an
 // explicit `await flushSaves()` - and SaveScheduler.flush() calls fire()

@@ -12,6 +12,16 @@ import type { ProjectFile } from '../fs/project.js';
 // only marks the folder unavailable, because the user's work is still safe.
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+/**
+ * Why a save is not happening, carried alongside the status because the status
+ * alone cannot say it and a transient notice cannot survive the next edit.
+ *
+ *   storage  - the write failed or there is nowhere to write (quota, no
+ *              IndexedDB, a rejected put). Retrying / freeing space may help.
+ *   conflict - another tab owns this project's record. Nothing is wrong with
+ *              storage; we are deliberately refusing so we do not clobber it.
+ */
+export type SaveBlockedReason = 'storage' | 'conflict';
 export type FolderStatus =
   | 'none'
   | 'connected'
@@ -124,7 +134,11 @@ export interface SaveSchedulerOptions {
   snapshot: () => SaveSnapshot | null;
   session: () => SessionStore | null;
   workspace: () => Workspace | null;
-  onSaveState: (status: SaveStatus, at: string | null) => void;
+  onSaveState: (
+    status: SaveStatus,
+    at: string | null,
+    blockedReason?: SaveBlockedReason,
+  ) => void;
   onFolderState: (status: FolderStatus) => void;
   /** Called when another tab has written this project since our last save. */
   onConflict?: (name: string) => void;
@@ -156,15 +170,67 @@ export class SaveScheduler {
    */
   private claim: { name: string; updatedAt: string } | null = null;
   /**
-   * Once true, stays true for the lifetime of this scheduler: a losing tab
-   * must stop saving permanently, not just for one debounce cycle, or it
-   * would silently resume clobbering the winning tab's work.
+   * The project a conflict latched on, or null for none. Latched rather than
+   * per-cycle: a losing tab must stop saving *that project* permanently, not
+   * just for one debounce cycle, or it would silently resume clobbering the
+   * winning tab's work.
+   *
+   * Scoped to a name rather than a bare boolean because the latch is about one
+   * record, not about this tab forever. Opening a different project means a
+   * different record and a fresh claim, and a scheduler that stayed latched
+   * would then sit there writing nothing, to no project, with the app looking
+   * perfectly healthy (final review, item 3). Switching back is safe: the
+   * claim is re-staked from the record actually loaded (see noteOpened), so
+   * this tab is working from the winner's data, and the next foreign write is
+   * detected again instead of being overwritten.
    */
-  private conflicted = false;
+  private conflictedProject: string | null = null;
 
   constructor(private readonly opts: SaveSchedulerOptions) {
     this.sessionSave = new Debounced(SESSION_DEBOUNCE_MS, () => this.runSession());
     this.folderSave = new Debounced(FOLDER_DEBOUNCE_MS, () => this.runFolder());
+  }
+
+  /**
+   * Adopt a stored record as the basis for the next save: `updatedAt` is what
+   * the app just loaded, so a stored record that no longer carries it has been
+   * written by somebody else. Called by the host whenever a project is opened
+   * or restored.
+   *
+   * Without this, "the claim self-invalidates on a project switch" cuts both
+   * ways: after switching away and back, there is no claim at all, and the
+   * first save writes over whatever another tab has done in the meantime. A
+   * null `updatedAt` means there is no stored record to compare against (a
+   * brand-new project, or one opened from the folder alone).
+   */
+  noteOpened(name: string, updatedAt: string | null): void {
+    this.syncSession(this.opts.session());
+    this.claim = updatedAt ? { name, updatedAt } : null;
+    this.clearStaleConflict(name);
+  }
+
+  /**
+   * `session` is a getter, not a fixed reference - the host can hand back a
+   * different SessionStore instance (e.g. after a storage reconnect). The
+   * stored-sources cache is only valid against the store it was built against,
+   * so drop it when the instance changes rather than trusting hashes that may
+   * only exist in a store we are no longer writing to. The same applies to the
+   * conflict-detection claim: it was staked against the old instance, so treat
+   * it as unknown against the new one rather than risk comparing it to
+   * unrelated data and firing a spurious conflict against a healthy single tab.
+   */
+  private syncSession(session: SessionStore | null): void {
+    if (session === this.lastSession) return;
+    this.storedSources.clear();
+    this.claim = null;
+    this.lastSession = session;
+  }
+
+  /** A latch belongs to one project; working on another one retires it. */
+  private clearStaleConflict(name: string): void {
+    if (this.conflictedProject && this.conflictedProject !== name) {
+      this.conflictedProject = null;
+    }
   }
 
   schedule(): void {
@@ -185,24 +251,33 @@ export class SaveScheduler {
 
   private async runSession(): Promise<void> {
     const snap = this.opts.snapshot();
-    const session = this.opts.session();
-    // Once conflicted, stay stopped - see the `conflicted` field comment.
-    if (!snap || !session || this.conflicted) return;
+    // Nothing is open (or nothing that could be written yet). This is the only
+    // silent return in either run method, and it is not a refusal: there is no
+    // project on screen to report anything about. Every path below that
+    // declines to write says so through onSaveState, because a save that
+    // quietly stops looks exactly like a save that is working.
+    if (!snap) return;
+    this.clearStaleConflict(snap.record.name);
 
-    // `session` is a getter, not a fixed reference - the host can hand back a
-    // different SessionStore instance (e.g. after a storage reconnect). The
-    // stored-sources cache is only valid against the store it was built
-    // against, so drop it when the instance changes rather than trusting
-    // hashes that may only exist in a store we are no longer writing to.
-    // The same applies to our conflict-detection claim below: it was staked
-    // against the old instance, so treat it as unknown against the new one
-    // rather than risk comparing it to unrelated data and firing a spurious
-    // conflict against a perfectly healthy single tab.
-    if (session !== this.lastSession) {
-      this.storedSources.clear();
-      this.claim = null;
-      this.lastSession = session;
+    const session = this.opts.session();
+    if (!session) {
+      // No browser storage at all. The folder mirror may still be running, but
+      // the authoritative copy - the one a reload restores from - is not being
+      // written, and the user has to know that.
+      this.opts.onSaveState('error', null, 'storage');
+      return;
     }
+    if (this.conflictedProject) {
+      // Re-asserted every cycle rather than announced once: the status is what
+      // the UI renders persistently, and an edit that resets it must not leave
+      // the app looking saved. onConflict is deliberately NOT re-fired - it
+      // writes a one-shot notice, and repeating it every 300ms would bury
+      // every other message the app has to show.
+      this.opts.onSaveState('error', null, 'conflict');
+      return;
+    }
+
+    this.syncSession(session);
 
     this.opts.onSaveState('saving', null);
     try {
@@ -216,8 +291,8 @@ export class SaveScheduler {
       if (this.claim && this.claim.name === snap.record.name) {
         const current = await session.getProject(snap.record.name);
         if (current && current.updatedAt !== this.claim.updatedAt) {
-          this.conflicted = true;
-          this.opts.onSaveState('error', null);
+          this.conflictedProject = snap.record.name;
+          this.opts.onSaveState('error', null, 'conflict');
           this.opts.onConflict?.(snap.record.name);
           return;
         }
@@ -237,7 +312,7 @@ export class SaveScheduler {
           // - unopenable on reload. Verify the write actually landed before
           // trusting the cache.
           if (!(await session.hasSource(snap.record.sourceHash))) {
-            this.opts.onSaveState('error', null);
+            this.opts.onSaveState('error', null, 'storage');
             return;
           }
         }
@@ -256,57 +331,72 @@ export class SaveScheduler {
         this.claim = { name: snap.record.name, updatedAt };
         this.opts.onSaveState('saved', updatedAt);
       } else {
-        this.opts.onSaveState('error', null);
+        this.opts.onSaveState('error', null, 'storage');
       }
     } catch {
-      this.opts.onSaveState('error', null);
+      this.opts.onSaveState('error', null, 'storage');
     }
   }
 
   private async runFolder(): Promise<void> {
     const snap = this.opts.snapshot();
+    if (!snap) return; // nothing open; see runSession()
+    this.clearStaleConflict(snap.record.name);
+
     const workspace = this.opts.workspace();
+    // No folder bound is the ordinary state of a browser-only user, not a
+    // refusal to write: folderStatus already says 'none' and the session store
+    // holds the work.
+    if (!workspace) return;
+
     // Once a session-store conflict has latched, the folder mirror must stop
     // too - it is the same project, so it would otherwise keep overwriting
     // the winning tab's project.json with this tab's stale state even though
     // the session-store write already refused (fix round 1, finding 2). The
     // `name-conflict` hash guard below does not catch this: same project,
-    // same sourceHash, so it never triggers.
-    if (!snap || !workspace || this.conflicted) return;
+    // same sourceHash, so it never triggers. Re-assert the reason on the way
+    // out so this branch is never a silent decline.
+    if (this.conflictedProject) {
+      this.opts.onSaveState('error', null, 'conflict');
+      return;
+    }
 
     try {
-      const existing = await workspace.listProjects();
-      if (!existing.includes(snap.record.name)) {
-        if (!snap.sourceBytes) return; // cannot create the folder without a source
+      // A folder project that shares our name is not necessarily OUR project.
+      // saveProject rewrites project.json and never touches source.ged, so
+      // writing over a different tree leaves that tree's GEDCOM sitting
+      // beside our op-log and our hash: a project that replays foreign ops
+      // (applyOps is total - it skips what it cannot match, in silence) and
+      // mis-identifies itself the next time an import matches by content.
+      // Only a proven match is safe to write over - see compareSource, which
+      // settles the pre-hash '' placeholder from the bytes rather than
+      // reading it as consent.
+      const cmp = await workspace.compareSource(
+        snap.record.name,
+        snap.record.sourceHash,
+      );
+      if (cmp === 'absent') {
+        if (!snap.sourceBytes) {
+          // Cannot create the folder copy without a source to put in it.
+          // Unreachable through the store (every load path sets sourceBytes),
+          // but it is still a write that did not happen, so it is reported.
+          this.opts.onFolderState('error');
+          return;
+        }
         await workspace.createProject(
           snap.record.name,
           snap.sourceBytes,
           snap.record.sourceFileName,
           snap.record.sourceHash,
         );
-      } else {
-        // A folder project that shares our name is not necessarily OUR project.
-        // saveProject rewrites project.json and never touches source.ged, so
-        // writing over a different tree leaves that tree's GEDCOM sitting
-        // beside our op-log and our hash: a project that replays foreign ops
-        // (applyOps is total - it skips what it cannot match, in silence) and
-        // mis-identifies itself the next time an import matches by content.
-        // Only a matching hash - or an unknown one ('', written before the
-        // field existed) - is safe to write over.
-        const onDisk = await workspace.projectSummary(snap.record.name);
-        if (
-          onDisk &&
-          onDisk.sourceHash &&
-          onDisk.sourceHash !== snap.record.sourceHash
-        ) {
-          // Stop the mirror rather than corrupt it, and never in silence. This
-          // is a refusal, not a failure - the folder is fine and reconnecting
-          // would change nothing, so it gets its own status distinct from
-          // 'error' (drive unplugged / permission revoked / folder deleted).
-          // The session copy still holds the user's work either way.
-          this.opts.onFolderState('name-conflict');
-          return;
-        }
+      } else if (cmp !== 'match') {
+        // Stop the mirror rather than corrupt it, and never in silence. This
+        // is a refusal, not a failure - the folder is fine and reconnecting
+        // would change nothing, so it gets its own status distinct from
+        // 'error' (drive unplugged / permission revoked / folder deleted).
+        // The session copy still holds the user's work either way.
+        this.opts.onFolderState('name-conflict');
+        return;
       }
       await workspace.saveProject(toProjectFile(snap.record));
       this.opts.onFolderState('connected');

@@ -182,17 +182,22 @@ describe('SaveScheduler', () => {
 
   const make = (over: Partial<ConstructorParameters<typeof SaveScheduler>[0]> = {}) => {
     const states: string[] = [];
+    /** Every onSaveState call as `status` or `status:reason`, in order. */
+    const reported: string[] = [];
     const folders: string[] = [];
     const scheduler = new SaveScheduler({
       snapshot: () => snapshot,
       session: () => session,
       workspace: () => workspace,
-      onSaveState: (status) => states.push(status),
+      onSaveState: (status, _at, reason) => {
+        states.push(status);
+        reported.push(reason ? `${status}:${reason}` : status);
+      },
       onFolderState: (status) => folders.push(status),
       ...over,
     });
     schedulers.push(scheduler);
-    return { scheduler, states, folders };
+    return { scheduler, states, folders, reported };
   };
 
   it('writes the project record and source to the session store', async () => {
@@ -538,6 +543,181 @@ describe('SaveScheduler', () => {
     expect(folders.filter((s) => s === 'connected').length).toBe(folderWritesBefore);
     const onDisk = await workspace.openProject('tree');
     expect(onDisk!.project.focalPersonId).not.toBe('LOSING-TAB');
+  });
+
+  // ---- Final review, item 5: two holes in runFolder's anti-corruption guard.
+
+  // 5b: a declared sourceHash of '' means UNKNOWN (the placeholder for
+  // project.json files written before the field existed), not "matches
+  // whatever you have" - snapshotOf already refuses to save on a falsy hash
+  // for exactly that reason. The old guard read '' as consent and wrote our
+  // op-log and our hash beside a stranger's source.ged, producing a project
+  // that silently replays foreign ops.
+  it("refuses to mirror over a folder project whose declared hash is '' but whose source is a different tree", async () => {
+    const { scheduler, folders } = make();
+    await workspace.createProject(
+      'tree',
+      new TextEncoder().encode('0 HEAD\n0 TRLR\n'),
+      'foreign.ged',
+    ); // hash ''
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders).toContain('name-conflict');
+    expect(folders).not.toContain('connected');
+    const onDisk = await workspace.openProject('tree');
+    // Untouched: still the foreign source, still no op-log of ours, and still
+    // not stamped with our hash.
+    expect(new TextDecoder().decode(onDisk!.gedcomBytes)).toContain('0 TRLR');
+    expect(onDisk!.project.sourceHash).toBe('');
+    expect(onDisk!.project.ops).toHaveLength(0);
+    // The browser copy - the authoritative one - still took the work.
+    expect(await session.getProject('tree')).not.toBeNull();
+  });
+
+  // 5a, at the level where it does damage: a drive that drops out mid-write
+  // leaves a truncated project.json beside a complete project.json.tmp.
+  // readSummary used to return null for that, which skipped the hash guard
+  // entirely and let the mirror write into a foreign project.
+  it('refuses to mirror over a foreign folder project whose project.json is truncated but whose temp file survives', async () => {
+    const { scheduler, folders } = make();
+    await workspace.createProject(
+      'tree',
+      new TextEncoder().encode('0 HEAD\n0 TRLR\n'),
+      'foreign.ged',
+      'foreign-hash',
+    );
+    const projects = await workspace.root.getDir('projects', false);
+    const dir = await projects!.getDir('tree', false);
+    const good = await (await dir!.getFile('project.json', false))!.readText();
+    await (await dir!.getFile('project.json.tmp', true))!.write(good);
+    await (await dir!.getFile('project.json', true))!.write(''); // truncated
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders).toContain('name-conflict');
+    expect(folders).not.toContain('connected');
+    expect((await workspace.openProject('tree'))!.project.sourceHash).toBe(
+      'foreign-hash',
+    );
+  });
+
+  // ---- Final review, item 3: a latched conflict must not silence the app.
+
+  it('reports a blocked save instead of returning silently when there is no session store', async () => {
+    const { scheduler, reported } = make({ session: () => null });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(reported).toContain('error:storage');
+  });
+
+  it('keeps reporting the conflict on every later cycle, so an edit cannot make the app look saved again', async () => {
+    const { scheduler, reported } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    const afterFirst = reported.filter((r) => r === 'error:conflict').length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    scheduler.schedule();
+    await scheduler.flush();
+    // The refusal is re-asserted, not announced once and then hidden behind
+    // whatever status the next edit leaves behind.
+    expect(reported.filter((r) => r === 'error:conflict').length).toBeGreaterThan(
+      afterFirst,
+    );
+    // ...and the last thing said was the refusal, not 'saving' or 'saved'.
+    expect(reported[reported.length - 1]).toBe('error:conflict');
+  });
+
+  // The core of item 3: the latch used to be a scheduler-wide boolean, so the
+  // user could open a completely different project and the app would look
+  // entirely normal - project name in the header, no indicator, no banner,
+  // tree fully editable - while writing nothing, anywhere, ever again.
+  it('resumes saving when the user switches to a different project after a conflict', async () => {
+    const { scheduler } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // conflict latches on 'tree'
+
+    // The user opens another project, exactly as openProjectByName does.
+    snapshot = {
+      record: makeRecord({ name: 'second', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('second', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(await session.getProject('second')).not.toBeNull();
+    expect(await session.getLastProject()).toBe('second');
+    // The other tab's copy of the first project is still untouched.
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+
+  // ...and clearing the latch must not resurrect the clobber it prevented.
+  // Switching back re-bases on the record actually loaded (noteOpened), so a
+  // later write by the other tab is detected again rather than overwritten.
+  it('re-detects a conflict after switching away and back to the contested project', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched
+    expect(conflicts).toEqual(['tree']);
+
+    // Away to another project...
+    snapshot = {
+      record: makeRecord({ name: 'second', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('second', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    // ...and back, re-reading 'tree' from the store (the other tab's version).
+    const reloaded = (await session.getProject('tree'))!;
+    snapshot = { record: reloaded, sourceBytes: GED };
+    scheduler.noteOpened('tree', reloaded.updatedAt);
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree']); // working from their data: no conflict
+
+    // Now the other tab writes again. That must be caught, not overwritten.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-06-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB-AGAIN',
+    });
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree', 'tree']);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB-AGAIN');
   });
 
   // Regression test (fix round 1, finding 1): SessionStore.renameProject()

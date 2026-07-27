@@ -47,6 +47,7 @@ import {
   SaveScheduler,
   toProjectFile,
   type FolderStatus,
+  type SaveBlockedReason,
   type SaveSnapshot,
   type SaveStatus,
 } from './persistence.js';
@@ -207,7 +208,18 @@ export interface AppState extends InternalState {
   reconnectWorkspace: () => Promise<void>;
   backfillFolder: () => Promise<void>;
   session: SessionStore | null;
-  saveState: { status: SaveStatus; lastSavedAt: string | null };
+  /**
+   * `blockedReason` is the durable half of a failed save. The status alone
+   * cannot distinguish "storage is broken" from "another tab owns this
+   * record", and the notice that used to carry that distinction is overwritten
+   * by the very next edit - so the true explanation was transient while the
+   * false one ("storage unavailable") was the one that stuck.
+   */
+  saveState: {
+    status: SaveStatus;
+    lastSavedAt: string | null;
+    blockedReason?: SaveBlockedReason;
+  };
   vaultDocs: VaultDoc[];
   checklists: SarChecklistState[];
   settings: ProjectSettings;
@@ -833,6 +845,9 @@ export const useStore = create<AppState>((set, get) => {
         projectCreatedAt: now,
         notice: `Created project "${name}".`,
       });
+      // A brand-new record: nothing stored to compare against, and any
+      // conflict latched on the project we just left no longer applies.
+      scheduler?.noteOpened(name, null);
 
       if (session) void requestPersistentStorage();
       persist(get);
@@ -884,6 +899,11 @@ export const useStore = create<AppState>((set, get) => {
             mapAncestorId: null,
             saveState: { status: 'saved', lastSavedAt: record.updatedAt },
           });
+          // This record is what our next save is based on. Telling the
+          // scheduler makes the first write after a cold start compare against
+          // it, so a second tab that has since written this project is noticed
+          // instead of being overwritten.
+          scheduler?.noteOpened(record.name, record.updatedAt);
           const focal = record.focalPersonId;
           if (focal && model.persons.has(focal)) get().setFocal(focal);
           else if (model.persons.size > 0) set({ focalPickerOpen: true });
@@ -1144,6 +1164,12 @@ export const useStore = create<AppState>((set, get) => {
         notice: `Opened project "${name}".`,
         mapAncestorId: null,
       });
+      // Base the next save on the record we just read (null when there is no
+      // stored record yet - a folder-only project). Also retires a conflict
+      // latched on a *different* project, so switching projects after another
+      // tab took one over resumes saving instead of going quietly dead.
+      scheduler?.noteOpened(name, record?.updatedAt ?? null);
+
       if (focalPersonId && model.persons.has(focalPersonId))
         get().setFocal(focalPersonId);
       else if (model.persons.size > 0) set({ focalPickerOpen: true });
@@ -1281,9 +1307,15 @@ scheduler = new SaveScheduler({
   snapshot: () => snapshotOf(useStore.getState()),
   session: () => useStore.getState().session,
   workspace: () => useStore.getState().workspace,
-  onSaveState: (status, at) =>
+  onSaveState: (status, at, blockedReason) =>
     useStore.setState((s) => ({
-      saveState: { status, lastSavedAt: at ?? s.saveState.lastSavedAt },
+      saveState: {
+        status,
+        lastSavedAt: at ?? s.saveState.lastSavedAt,
+        // Always reassigned, never merged: a save that succeeds must clear the
+        // last reason it failed, or the banner outlives the problem.
+        blockedReason,
+      },
     })),
   onFolderState: (status) => useStore.setState({ folderStatus: status }),
   onConflict: (name) =>

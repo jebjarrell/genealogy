@@ -56,6 +56,70 @@ describe('App — save status and folder banner', () => {
     expect(screen.getByText(/Not saved/)).toBeInTheDocument();
   });
 
+  // Final review, item 4: 'error' used to render one fixed sentence -
+  // "storage unavailable" - for a condition that is nothing of the sort. The
+  // accurate explanation lived only in `notice`, which the next edit
+  // overwrites, so the true message was transient and the durable one was
+  // false.
+  it('distinguishes a tab conflict from a storage failure, and says so permanently', () => {
+    useStore.setState({
+      projectName: 'tree',
+      saveState: { status: 'error', lastSavedAt: null, blockedReason: 'conflict' },
+    });
+    render(<App />);
+
+    expect(screen.getByText(/Not saved/)).toHaveTextContent(/open in another tab/);
+    expect(screen.queryByText(/storage unavailable/)).toBeNull();
+    // Not a transient notice: a standing element that says nothing is saved.
+    const banner = screen.getByRole('alert');
+    expect(banner).toHaveTextContent(/Nothing is being saved/);
+    expect(banner).toHaveTextContent(/tree/);
+  });
+
+  it('keeps the conflict banner up across the edits that overwrite `notice`', () => {
+    useStore.setState({
+      projectName: 'tree',
+      saveState: { status: 'error', lastSavedAt: null, blockedReason: 'conflict' },
+    });
+    render(<App />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // What every subsequent edit does to the advice the user was given.
+    act(() => {
+      useStore.setState({ notice: 'Person updated.' });
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Nothing is being saved/);
+  });
+
+  it('still says storage unavailable when that is what actually happened', () => {
+    useStore.setState({
+      projectName: 'tree',
+      saveState: { status: 'error', lastSavedAt: null, blockedReason: 'storage' },
+    });
+    render(<App />);
+    expect(screen.getByText(/storage unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps the relative save time ticking instead of freezing at "just now"', () => {
+    vi.useFakeTimers();
+    try {
+      useStore.setState({
+        projectName: 'tree',
+        saveState: { status: 'saved', lastSavedAt: new Date().toISOString() },
+      });
+      render(<App />);
+      expect(screen.getByText(/Saved just now/)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText(/Saved 1m ago/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows the folder-unavailable banner when a folder write fails', () => {
     useStore.setState({ projectName: 'tree', folderStatus: 'error' });
     render(<App />);
@@ -80,9 +144,20 @@ describe('App — save status and folder banner', () => {
     useStore.setState({ projectName: 'tree', folderStatus: 'name-conflict' });
     render(<App />);
     expect(
-      screen.getByText(/already exists in your workspace folder/),
+      screen.getByText(/A different family tree is already stored as/),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Reconnect/ })).toBeNull();
+  });
+
+  // Final review, item 2: the old copy said "Rename this project to continue
+  // mirroring", while renameCurrentProject was renaming the *folder's* project
+  // - the untouched tree this banner exists to protect. The instruction has to
+  // match what rename now does: move ours, leave theirs alone.
+  it('promises the folder copy is left alone, which is what renaming now does', () => {
+    useStore.setState({ projectName: 'tree', folderStatus: 'name-conflict' });
+    render(<App />);
+    expect(screen.getByText(/leaves the folder/)).toBeInTheDocument();
+    expect(screen.queryByText(/Rename this project to continue mirroring/)).toBeNull();
   });
 
   it('dismisses the banner, but re-arms it when a different failure supersedes it (C1 regression)', () => {
@@ -105,7 +180,7 @@ describe('App — save status and folder banner', () => {
       useStore.setState({ folderStatus: 'name-conflict' });
     });
     expect(
-      screen.getByText(/already exists in your workspace folder/),
+      screen.getByText(/A different family tree is already stored as/),
     ).toBeInTheDocument();
   });
 

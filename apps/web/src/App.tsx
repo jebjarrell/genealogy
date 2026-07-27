@@ -81,15 +81,58 @@ function relativeTime(iso: string | null): string {
 }
 
 function SaveIndicator() {
-  const { status, lastSavedAt } = useStore((s) => s.saveState);
+  const status = useStore((s) => s.saveState.status);
+  const lastSavedAt = useStore((s) => s.saveState.lastSavedAt);
+  const blockedReason = useStore((s) => s.saveState.blockedReason);
   const projectName = useStore((s) => s.projectName);
+  // relativeTime() is computed at render, and nothing re-renders this on its
+  // own between saves - so "Saved just now" froze there for as long as the user
+  // kept reading instead of typing. Tick it along on the coarsest interval the
+  // wording can distinguish.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   if (!projectName) return null;
   if (status === 'saving') return <span className="text-gray-500"> · Saving…</span>;
   if (status === 'error')
-    return <span className="text-red-600"> · Not saved — storage unavailable</span>;
+    return (
+      <span className="text-red-600">
+        {blockedReason === 'conflict'
+          ? ' · Not saved — open in another tab'
+          : ' · Not saved — storage unavailable'}
+      </span>
+    );
   if (status === 'saved' && lastSavedAt)
     return <span className="text-gray-500"> · Saved {relativeTime(lastSavedAt)}</span>;
   return null;
+}
+
+/**
+ * A cross-tab conflict, stated permanently. It cannot live in `notice` (the
+ * next edit overwrites it) and it cannot live in the save indicator alone (four
+ * words in a header, for the condition where nothing the user types is being
+ * written anywhere). No Dismiss: there is nothing to acknowledge, only
+ * something to act on.
+ */
+function ConflictBanner() {
+  const blockedReason = useStore((s) => s.saveState.blockedReason);
+  const projectName = useStore((s) => s.projectName);
+  if (blockedReason !== 'conflict' || !projectName) return null;
+  return (
+    <div
+      role="alert"
+      className="border-b border-red-300 bg-red-50 px-4 py-2 text-sm text-red-900"
+    >
+      <span className="font-semibold">Nothing is being saved.</span> &quot;
+      {projectName}&quot; is open in another tab, and that tab has saved changes since
+      this one did. To avoid overwriting them, this tab has stopped writing — to the
+      browser and to the workspace folder. Reload this page to pick up the other
+      tab&apos;s version; anything you have changed here since will be lost.
+    </div>
+  );
 }
 
 function FolderBanner() {
@@ -118,9 +161,11 @@ function FolderBanner() {
     return (
       <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
         <span>
-          A different project named &quot;{projectName}&quot; already exists in your
-          workspace folder. Your work is saved in this browser but is not being
-          mirrored. Rename this project to continue mirroring.
+          A different family tree is already stored as &quot;{projectName}&quot; in your
+          workspace folder, so this project is not being mirrored there. Your work is
+          saved in this browser. Renaming this project (Workspace ▸ Rename current
+          project) mirrors it under the new name and leaves the folder&apos;s &quot;
+          {projectName}&quot; exactly as it is.
         </span>
         <span className="flex shrink-0 gap-2">
           <button
@@ -261,6 +306,7 @@ export function App() {
           <UploadButton />
         </div>
       </header>
+      <ConflictBanner />
       <FolderBanner />
 
       {!model ? (
