@@ -91,10 +91,45 @@ function SaveIndicator() {
 
 function FolderBanner() {
   const folderStatus = useStore((s) => s.folderStatus);
+  const projectName = useStore((s) => s.projectName);
   const reconnectWorkspace = useStore((s) => s.reconnectWorkspace);
   const [dismissed, setDismissed] = useState(false);
+
+  // A dismissal only ever applies to the status the user saw when they
+  // clicked it. A self-heal to 'connected' and then a *different* failure
+  // (or the reverse) must render again - one Dismiss must not silence every
+  // future problem for the rest of the session.
+  useEffect(() => {
+    setDismissed(false);
+  }, [folderStatus]);
+
   if (dismissed) return null;
-  if (folderStatus !== 'error' && folderStatus !== 'needs-permission') return null;
+  if (
+    folderStatus !== 'error' &&
+    folderStatus !== 'needs-permission' &&
+    folderStatus !== 'name-conflict'
+  )
+    return null;
+
+  if (folderStatus === 'name-conflict') {
+    return (
+      <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+        <span>
+          A different project named &quot;{projectName}&quot; already exists in your
+          workspace folder. Your work is saved in this browser but is not being
+          mirrored. Rename this project to continue mirroring.
+        </span>
+        <span className="flex shrink-0 gap-2">
+          <button
+            className="rounded border border-amber-300 px-2 py-0.5 text-xs hover:bg-amber-100"
+            onClick={() => setDismissed(true)}
+          >
+            Dismiss
+          </button>
+        </span>
+      </div>
+    );
+  }
 
   const isError = folderStatus === 'error';
   return (

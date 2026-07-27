@@ -34,7 +34,6 @@ import {
 import {
   DEFAULT_SETTINGS,
   type PedigreeOrientation,
-  type ProjectFile,
   type ProjectSettings,
   type SarChecklistState,
 } from '../fs/project.js';
@@ -262,7 +261,6 @@ export interface AppState extends InternalState {
   disconnectWorkspace: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshVault: () => Promise<void>;
-  saveAsProject: (name: string) => Promise<void>;
   openProjectByName: (name: string) => Promise<void>;
   renameCurrentProject: (name: string) => Promise<void>;
   deleteProjectByName: (name: string) => Promise<void>;
@@ -965,11 +963,13 @@ export const useStore = create<AppState>((set, get) => {
 
     disconnectWorkspace: async () => {
       await clearHandle();
+      // Disconnecting stops the folder *mirror*, not the browser copy: the
+      // open project (and its autosave to the session store) must keep
+      // running, or every edit made after this point is silently lost.
       set({
         workspace: null,
         workspaceName: null,
         folderStatus: 'none',
-        projectName: null,
         vaultDocs: [],
       });
       // Projects also live in the browser now; re-derive the list from the
@@ -1005,33 +1005,6 @@ export const useStore = create<AppState>((set, get) => {
       } catch {
         /* ignore */
       }
-    },
-
-    saveAsProject: async (name) => {
-      const { workspace, sourceBytes, fileName, ops, focalPersonId, checklists, settings } =
-        get();
-      if (!workspace || !sourceBytes) {
-        set({ notice: 'Connect a workspace and load a file first.' });
-        return;
-      }
-      const hash = await sha256Hex(sourceBytes);
-      await workspace.createProject(name, sourceBytes, fileName ?? 'source.ged', hash);
-      const project: ProjectFile = {
-        format: 'genealogy-graph/project',
-        version: 1,
-        name,
-        sourceFile: 'source.ged',
-        sourceFileName: fileName ?? 'source.ged',
-        sourceHash: hash,
-        focalPersonId,
-        ops,
-        checklists,
-        settings,
-        updatedAt: new Date().toISOString(),
-      };
-      await workspace.saveProject(project);
-      set({ projectName: name, sourceHash: hash, notice: `Saved as project "${name}".` });
-      await get().refreshProjects();
     },
 
     openProjectByName: async (name) => {

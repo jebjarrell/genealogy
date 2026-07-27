@@ -12,7 +12,7 @@ import type { ProjectFile } from '../fs/project.js';
 // only marks the folder unavailable, because the user's work is still safe.
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-export type FolderStatus = 'none' | 'connected' | 'needs-permission' | 'error';
+export type FolderStatus = 'none' | 'connected' | 'needs-permission' | 'error' | 'name-conflict';
 
 export const SESSION_DEBOUNCE_MS = 300;
 export const FOLDER_DEBOUNCE_MS = 1000;
@@ -233,10 +233,12 @@ export class SaveScheduler {
         // field existed) - is safe to write over.
         const onDisk = await workspace.projectSummary(snap.record.name);
         if (onDisk && onDisk.sourceHash && onDisk.sourceHash !== snap.record.sourceHash) {
-          // Stop the mirror rather than corrupt it, and never in silence. The
-          // session copy still holds the user's work, which is exactly what the
-          // folder-error state means, so it needs no new status value.
-          this.opts.onFolderState('error');
+          // Stop the mirror rather than corrupt it, and never in silence. This
+          // is a refusal, not a failure - the folder is fine and reconnecting
+          // would change nothing, so it gets its own status distinct from
+          // 'error' (drive unplugged / permission revoked / folder deleted).
+          // The session copy still holds the user's work either way.
+          this.opts.onFolderState('name-conflict');
           return;
         }
       }

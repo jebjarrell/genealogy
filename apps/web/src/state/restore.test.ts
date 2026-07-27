@@ -160,8 +160,9 @@ describe('backfillFolder', () => {
     expect(new TextDecoder().decode(opened!.gedcomBytes)).toBe(OTHER_GED);
     expect(opened!.project.sourceHash).toBe('existing-hash');
     expect(opened!.project.ops).toHaveLength(0);
-    // Refused, and said so.
-    expect(useStore.getState().folderStatus).toBe('error');
+    // Refused, and said so - distinct from a genuine write failure, since
+    // reconnecting would not fix a name collision.
+    expect(useStore.getState().folderStatus).toBe('name-conflict');
     // The browser copy - the authoritative one - still has the work.
     expect((await session.getProject('tree'))!.ops).toHaveLength(1);
   });
