@@ -25,6 +25,12 @@ import { Workspace } from '../fs/workspace.js';
 import { dirFromHandle, hasPermission, requestPermissionInteractive, pickDirectory } from '../fs/fsa.js';
 import { saveHandle, loadHandle, clearHandle } from '../fs/handleStore.js';
 import { sha256Hex } from '../fs/hash.js';
+import { sanitizeProjectName, uniqueProjectName } from '../fs/projectName.js';
+import {
+  IdbSessionStore,
+  requestPersistentStorage,
+  type SessionStore,
+} from '../fs/sessionStore.js';
 import {
   DEFAULT_SETTINGS,
   type PedigreeOrientation,
@@ -33,7 +39,12 @@ import {
   type SarChecklistState,
 } from '../fs/project.js';
 import type { VaultDoc } from '../fs/vault.js';
-import type { FolderStatus } from './persistence.js';
+import {
+  SaveScheduler,
+  type FolderStatus,
+  type SaveSnapshot,
+  type SaveStatus,
+} from './persistence.js';
 
 export const NODE_BUDGET = 300;
 
@@ -64,108 +75,34 @@ export interface Highlight {
   edgeKeys: Set<string>;
 }
 
-// ---- localStorage fallback (quick mode, no bound workspace) -------------
-// When no workspace folder is bound the app still works: the op-log, focal
-// choice, checklists and settings persist to localStorage keyed by file. The
-// pristine parsed model is never written; ops are replayed over it on load.
+// ---- Autosave ------------------------------------------------------------
+// One scheduler for the app's lifetime. It pulls a snapshot from the store on
+// each run rather than capturing state at schedule time, so a burst of edits
+// coalesces into a single write of the latest state.
 
-const rememberKey = (f: string) => `genealogy:focal:${f}`;
-const opsKey = (f: string) => `genealogy:ops:${f}`;
-const auxKey = (f: string) => `genealogy:aux:${f}`;
+let scheduler: SaveScheduler | null = null;
 
-function lsGet(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-function lsSet(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
-}
-
-function rememberFocal(fileName: string | null, id: string): void {
-  if (fileName) lsSet(rememberKey(fileName), id);
-}
-function recallFocal(fileName: string): string | undefined {
-  return lsGet(rememberKey(fileName)) ?? undefined;
-}
-function loadOpsLS(fileName: string | null): EditOp[] {
-  if (!fileName) return [];
-  try {
-    const parsed: unknown = JSON.parse(lsGet(opsKey(fileName)) ?? '[]');
-    return Array.isArray(parsed) ? (parsed as EditOp[]) : [];
-  } catch {
-    return [];
-  }
-}
-function saveOpsLS(fileName: string | null, ops: EditOp[]): void {
-  if (fileName) lsSet(opsKey(fileName), JSON.stringify(ops));
-}
-interface AuxState {
-  checklists: SarChecklistState[];
-  settings: ProjectSettings;
-}
-function loadAuxLS(fileName: string | null): AuxState {
-  const fallback: AuxState = { checklists: [], settings: { ...DEFAULT_SETTINGS } };
-  if (!fileName) return fallback;
-  try {
-    const raw = JSON.parse(lsGet(auxKey(fileName)) ?? '{}') as Partial<AuxState>;
-    return {
-      checklists: Array.isArray(raw.checklists) ? raw.checklists : [],
-      settings: {
-        orientation:
-          raw.settings?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
-      },
-    };
-  } catch {
-    return fallback;
-  }
-}
-function saveAuxLS(fileName: string | null, aux: AuxState): void {
-  if (fileName) lsSet(auxKey(fileName), JSON.stringify(aux));
-}
-
-// ---- Project-mode autosave (debounced) ---------------------------------
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-function currentProjectFile(s: AppState): ProjectFile {
+function snapshotOf(s: AppState): SaveSnapshot | null {
+  if (!s.projectName || !s.baseModel) return null;
   return {
-    format: 'genealogy-graph/project',
-    version: 1,
-    name: s.projectName ?? 'Untitled',
-    sourceFile: 'source.ged',
-    sourceFileName: s.fileName ?? 'source.ged',
-    sourceHash: s.sourceHash ?? '',
-    focalPersonId: s.focalPersonId,
-    ops: s.ops,
-    checklists: s.checklists,
-    settings: s.settings,
-    updatedAt: new Date().toISOString(),
+    record: {
+      name: s.projectName,
+      sourceHash: s.sourceHash ?? '',
+      sourceFileName: s.fileName ?? 'source.ged',
+      focalPersonId: s.focalPersonId,
+      ops: s.ops,
+      checklists: s.checklists,
+      settings: s.settings,
+      createdAt: s.projectCreatedAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    sourceBytes: s.sourceBytes,
   };
 }
 
-/** Persist current state to the active backend (project folder or localStorage). */
-function persist(get: () => AppState): void {
-  const s = get();
-  if (s.workspace && s.projectName) {
-    if (saveTimer) clearTimeout(saveTimer);
-    const ws = s.workspace;
-    const project = currentProjectFile(s);
-    saveTimer = setTimeout(() => {
-      void ws.saveProject(project).catch(() => {
-        /* surfaced via save-state if needed */
-      });
-    }, 400);
-  } else if (s.fileName) {
-    saveOpsLS(s.fileName, s.ops);
-    saveAuxLS(s.fileName, { checklists: s.checklists, settings: s.settings });
-  }
+/** Queue a save of the current state to every available backend. */
+function persist(_get: () => AppState): void {
+  scheduler?.schedule();
 }
 
 // ---- Survivor mapping (ids that may have been merged away) --------------
@@ -250,13 +187,22 @@ export interface AppState extends InternalState {
   workspaceName: string | null;
   projects: string[];
   projectName: string | null;
+  /** Content hash of the open project's GEDCOM. */
   sourceHash: string | null;
+  projectCreatedAt: string | null;
   folderStatus: FolderStatus;
   reconnectWorkspace: () => Promise<void>;
   backfillFolder: () => Promise<void>;
+  session: SessionStore | null;
+  saveState: { status: SaveStatus; lastSavedAt: string | null };
   vaultDocs: VaultDoc[];
   checklists: SarChecklistState[];
   settings: ProjectSettings;
+
+  // ---- session lifecycle ----
+  setSessionStore: (store: SessionStore | null) => void;
+  importGedcom: (bytes: Uint8Array, fileName: string) => Promise<void>;
+  flushSaves: () => Promise<void>;
 
   // ---- model loading ----
   loadModel: (model: GenealogyModel, fileName: string, sourceBytes?: Uint8Array) => void;
@@ -470,20 +416,21 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     projectName: null,
     sourceHash: null,
+    projectCreatedAt: null,
     folderStatus: 'none',
+    session: typeof indexedDB !== 'undefined' ? new IdbSessionStore() : null,
+    saveState: { status: 'idle', lastSavedAt: null },
     vaultDocs: [],
     checklists: [],
     settings: { ...DEFAULT_SETTINGS },
 
     loadModel: (baseModel, fileName, sourceBytes) => {
-      const ops = loadOpsLS(fileName);
-      const aux = loadAuxLS(fileName);
-      const model = applyOps(baseModel, ops);
+      const model = applyOps(baseModel, []);
       const graph = buildGraph(model);
       set({
         ...emptyInternal,
         baseModel,
-        ops,
+        ops: [],
         redoStack: [],
         model,
         graph,
@@ -500,8 +447,8 @@ export const useStore = create<AppState>((set, get) => {
         mergeOpen: false,
         notice: null,
         mapAncestorId: null,
-        checklists: aux.checklists,
-        settings: aux.settings,
+        checklists: [],
+        settings: { ...DEFAULT_SETTINGS },
         // Loading a loose file leaves any bound workspace, but clears the project.
         projectName: null,
         sourceHash: null,
@@ -511,23 +458,14 @@ export const useStore = create<AppState>((set, get) => {
         set({ notice: 'No individuals found in this file.' });
         return;
       }
-
-      const remembered = recallFocal(fileName);
       const declared = model.header?.rootPersonId;
-      const chosen =
-        remembered && model.persons.has(remembered)
-          ? remembered
-          : declared && model.persons.has(declared)
-            ? declared
-            : undefined;
-      if (chosen) get().setFocal(chosen);
+      if (declared && model.persons.has(declared)) get().setFocal(declared);
       else set({ focalPickerOpen: true });
     },
 
     setFocal: (personId) => {
-      const { graph, model, viewOptions, fileName } = get();
+      const { graph, model, viewOptions } = get();
       if (!graph || !model) return;
-      rememberFocal(fileName, personId);
       set({
         focalPersonId: personId,
         ...deriveFocalState(graph, model, personId, viewOptions),
@@ -764,6 +702,54 @@ export const useStore = create<AppState>((set, get) => {
     setOrientation: (orientation) => {
       set((s) => ({ settings: { ...s.settings, orientation } }));
       persist(get);
+    },
+
+    // ---- session lifecycle ----
+
+    setSessionStore: (store) => set({ session: store }),
+
+    flushSaves: async () => {
+      await scheduler?.flush();
+    },
+
+    importGedcom: async (bytes, fileName) => {
+      const hash = await sha256Hex(bytes);
+      const { session, workspace } = get();
+
+      // 1. Same bytes already imported? Reopen, keeping every edit.
+      const records = session ? await session.listProjects() : [];
+      const sessionHit = records.find((r) => r.sourceHash === hash);
+      if (sessionHit) {
+        await get().openProjectByName(sessionHit.name);
+        set({ notice: `Reopened "${sessionHit.name}".` });
+        return;
+      }
+      if (workspace) {
+        const summaries = await workspace.listProjectSummaries();
+        const folderHit = summaries.find((p) => p.sourceHash === hash);
+        if (folderHit) {
+          await get().openProjectByName(folderHit.name);
+          set({ notice: `Reopened "${folderHit.name}".` });
+          return;
+        }
+      }
+
+      // 2. New content: create a project named from the file.
+      const taken = [...records.map((r) => r.name), ...get().projects];
+      const name = uniqueProjectName(sanitizeProjectName(fileName), taken);
+      const now = new Date().toISOString();
+
+      get().loadModel(parseGedcom(bytes), fileName, bytes);
+      set({
+        projectName: name,
+        sourceHash: hash,
+        projectCreatedAt: now,
+        notice: `Created project "${name}".`,
+      });
+
+      if (session) void requestPersistentStorage();
+      persist(get);
+      await get().refreshProjects();
     },
 
     // ---- workspace / projects / vault ----
@@ -1024,4 +1010,18 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
   };
+});
+
+// The scheduler pulls live state through `useStore.getState()`, so it is wired
+// after the store exists. Snapshot-on-run (not on-schedule) is what lets a burst
+// of edits collapse into one write of the final state.
+scheduler = new SaveScheduler({
+  snapshot: () => snapshotOf(useStore.getState()),
+  session: () => useStore.getState().session,
+  workspace: () => useStore.getState().workspace,
+  onSaveState: (status, at) =>
+    useStore.setState((s) => ({
+      saveState: { status, lastSavedAt: at ?? s.saveState.lastSavedAt },
+    })),
+  onFolderState: (status) => useStore.setState({ folderStatus: status }),
 });
