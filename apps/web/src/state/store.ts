@@ -780,6 +780,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         workspace: ws,
         workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
         notice: 'Workspace connected.',
       });
       await get().refreshProjects();
@@ -836,7 +837,14 @@ export const useStore = create<AppState>((set, get) => {
 
     disconnectWorkspace: async () => {
       await clearHandle();
-      set({ workspace: null, workspaceName: null, projects: [], projectName: null, vaultDocs: [] });
+      set({
+        workspace: null,
+        workspaceName: null,
+        folderStatus: 'none',
+        projects: [],
+        projectName: null,
+        vaultDocs: [],
+      });
     },
 
     refreshProjects: async () => {
