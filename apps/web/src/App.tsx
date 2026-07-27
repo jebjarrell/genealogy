@@ -67,6 +67,61 @@ function CollapsibleSection({
   );
 }
 
+function relativeTime(iso: string | null): string {
+  if (!iso) return '';
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
+}
+
+function SaveIndicator() {
+  const { status, lastSavedAt } = useStore((s) => s.saveState);
+  const projectName = useStore((s) => s.projectName);
+  if (!projectName) return null;
+  if (status === 'saving') return <span className="text-gray-500"> · Saving…</span>;
+  if (status === 'error')
+    return <span className="text-red-600"> · Not saved — storage unavailable</span>;
+  if (status === 'saved' && lastSavedAt)
+    return <span className="text-gray-500"> · Saved {relativeTime(lastSavedAt)}</span>;
+  return null;
+}
+
+function FolderBanner() {
+  const folderStatus = useStore((s) => s.folderStatus);
+  const reconnectWorkspace = useStore((s) => s.reconnectWorkspace);
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  if (folderStatus !== 'error' && folderStatus !== 'needs-permission') return null;
+
+  const isError = folderStatus === 'error';
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+      <span>
+        {isError
+          ? "Can't write to the workspace folder. Your work is saved in this browser."
+          : 'The workspace folder needs permission again. Your work is saved in this browser.'}
+      </span>
+      <span className="flex shrink-0 gap-2">
+        <button
+          className="rounded bg-amber-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-amber-700"
+          onClick={() => void reconnectWorkspace()}
+        >
+          Reconnect
+        </button>
+        <button
+          className="rounded border border-amber-300 px-2 py-0.5 text-xs hover:bg-amber-100"
+          onClick={() => setDismissed(true)}
+        >
+          Dismiss
+        </button>
+      </span>
+    </div>
+  );
+}
+
 const TABS: { id: MainView; label: string; title: string }[] = [
   { id: 'graph', label: 'Graph', title: 'Interactive ego-centric pedigree' },
   { id: 'map', label: 'Map', title: 'Migration map for an ancestral line' },
@@ -82,7 +137,8 @@ export function App() {
   const projectName = useStore((s) => s.projectName);
   const workspaceName = useStore((s) => s.workspaceName);
   const openFocalPicker = useStore((s) => s.openFocalPicker);
-  const restoreWorkspace = useStore((s) => s.restoreWorkspace);
+  const restoreSession = useStore((s) => s.restoreSession);
+  const flushSaves = useStore((s) => s.flushSaves);
   const focalName = useStore((s) => {
     if (!s.model || !s.focalPersonId) return null;
     return s.model.persons.get(s.focalPersonId)?.names[0]?.full ?? s.focalPersonId;
@@ -93,10 +149,25 @@ export function App() {
   const [mainView, setMainView] = useState<MainView>('graph');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
 
-  // Re-bind a previously-connected workspace folder on load (no-op without one).
+  // Restore the last project and re-bind the folder (both no-ops when absent).
   useEffect(() => {
-    void restoreWorkspace();
-  }, [restoreWorkspace]);
+    void restoreSession();
+  }, [restoreSession]);
+
+  // A 300ms debounce means an edit made just before the tab closes would
+  // otherwise be lost. Flush on the last events the browser reliably delivers.
+  useEffect(() => {
+    const flush = () => void flushSaves();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [flushSaves]);
 
   return (
     <div className="flex h-full flex-col bg-gray-100 text-gray-900">
@@ -106,6 +177,7 @@ export function App() {
           <div className="text-xs text-gray-500">
             {projectName && <span className="font-medium text-gray-700">{projectName} · </span>}
             {fileName}
+            <SaveIndicator />
             {focalName && (
               <>
                 {' · focal: '}
@@ -149,6 +221,7 @@ export function App() {
           <UploadButton />
         </div>
       </header>
+      <FolderBanner />
 
       {!model ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">

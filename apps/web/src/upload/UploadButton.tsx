@@ -1,21 +1,20 @@
 import { useRef, useState } from 'react';
-import { parseGedcom } from '@genealogy/core';
 import { useStore } from '../state/store.js';
 import { readFileAsBytes } from './loadGedcom.js';
 // Bundled sample so the app is verifiable without hunting for a .ged file.
 import sampleGed from '../../../../packages/core/tests/fixtures/pedigree-collapse.ged?raw';
 
+const SAMPLE_NAME = 'pedigree-collapse-sample.ged';
+
 export function UploadButton() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const loadModel = useStore((s) => s.loadModel);
+  const importGedcom = useStore((s) => s.importGedcom);
   const [busy, setBusy] = useState(false);
 
-  async function onFile(file: File) {
+  async function run(bytes: Uint8Array, fileName: string) {
     setBusy(true);
     try {
-      const bytes = await readFileAsBytes(file);
-      // Pass the raw bytes too so the file can be saved as a folder-backed project.
-      loadModel(parseGedcom(bytes), file.name, bytes);
+      await importGedcom(bytes, fileName);
     } finally {
       setBusy(false);
     }
@@ -30,7 +29,9 @@ export function UploadButton() {
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) void onFile(file);
+          if (file) void readFileAsBytes(file).then((bytes) => run(bytes, file.name));
+          // Allow re-picking the same file (change does not fire otherwise).
+          e.target.value = '';
         }}
       />
       <button
@@ -42,13 +43,8 @@ export function UploadButton() {
       </button>
       <button
         className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100"
-        onClick={() =>
-          loadModel(
-            parseGedcom(sampleGed),
-            'pedigree-collapse.ged (sample)',
-            new TextEncoder().encode(sampleGed),
-          )
-        }
+        disabled={busy}
+        onClick={() => void run(new TextEncoder().encode(sampleGed), SAMPLE_NAME)}
       >
         Load sample
       </button>

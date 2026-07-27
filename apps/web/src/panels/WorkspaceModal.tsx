@@ -11,16 +11,14 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
   const workspaceName = useStore((s) => s.workspaceName);
   const projects = useStore((s) => s.projects);
   const projectName = useStore((s) => s.projectName);
-  const fileName = useStore((s) => s.fileName);
-  const sourceBytes = useStore((s) => s.sourceBytes);
   const connectWorkspace = useStore((s) => s.connectWorkspace);
   const disconnectWorkspace = useStore((s) => s.disconnectWorkspace);
-  const saveAsProject = useStore((s) => s.saveAsProject);
   const openProjectByName = useStore((s) => s.openProjectByName);
   const renameCurrentProject = useStore((s) => s.renameCurrentProject);
   const deleteProjectByName = useStore((s) => s.deleteProjectByName);
+  const folderStatus = useStore((s) => s.folderStatus);
+  const reconnectWorkspace = useStore((s) => s.reconnectWorkspace);
 
-  const [newName, setNewName] = useState('');
   const [renameTo, setRenameTo] = useState('');
 
   const supported = isFileSystemAccessSupported();
@@ -59,6 +57,18 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
                   Disconnect
                 </button>
               </div>
+            ) : folderStatus === 'needs-permission' ? (
+              <div className="mt-1 space-y-1">
+                <p className="text-xs text-gray-600">
+                  A workspace folder is remembered but needs permission again.
+                </p>
+                <button
+                  className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700"
+                  onClick={() => void reconnectWorkspace()}
+                >
+                  Reconnect folder
+                </button>
+              </div>
             ) : (
               <button
                 className="mt-1 rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
@@ -70,107 +80,83 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
             )}
           </section>
 
-          {workspace && (
-            <>
-              {/* Save current as project */}
+          <>
+            {/* Existing projects */}
+            <section>
+              <h3 className="text-sm font-semibold text-gray-700">Projects</h3>
+              {projects.length === 0 ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  No projects yet — load a GEDCOM to create one.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-1">
+                  {projects.map((name) => (
+                    <li
+                      key={name}
+                      className={`flex items-center justify-between gap-2 rounded border p-2 text-sm ${
+                        name === projectName
+                          ? 'border-blue-400 bg-blue-50'
+                          : 'border-gray-200'
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">
+                        {name}
+                        {name === projectName && (
+                          <span className="ml-1 text-[11px] text-blue-600">(open)</span>
+                        )}
+                        {!workspace && (
+                          <span className="ml-1 text-[11px] text-gray-400">
+                            (this browser)
+                          </span>
+                        )}
+                      </span>
+                      <span className="flex shrink-0 gap-1">
+                        <button
+                          className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
+                          onClick={() => void openProjectByName(name)}
+                        >
+                          Open
+                        </button>
+                        <button
+                          className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+                          onClick={() => void deleteProjectByName(name)}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {/* Rename current */}
+            {projectName && (
               <section>
                 <h3 className="text-sm font-semibold text-gray-700">
-                  Save current file as a project
+                  Rename current project
                 </h3>
-                {fileName && sourceBytes ? (
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
-                      placeholder="Project name"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                    />
-                    <button
-                      className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
-                      disabled={newName.trim() === ''}
-                      onClick={() => {
-                        void saveAsProject(newName.trim());
-                        setNewName('');
-                      }}
-                    >
-                      Save project
-                    </button>
-                  </div>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-500">Load a GEDCOM file first.</p>
-                )}
+                <div className="mt-1 flex gap-2">
+                  <input
+                    className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
+                    placeholder={projectName}
+                    value={renameTo}
+                    onChange={(e) => setRenameTo(e.target.value)}
+                  />
+                  <button
+                    className="rounded border border-gray-300 px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                    disabled={renameTo.trim() === ''}
+                    onClick={() => {
+                      void renameCurrentProject(renameTo.trim());
+                      setRenameTo('');
+                    }}
+                  >
+                    Rename
+                  </button>
+                </div>
               </section>
-
-              {/* Existing projects */}
-              <section>
-                <h3 className="text-sm font-semibold text-gray-700">Projects</h3>
-                {projects.length === 0 ? (
-                  <p className="mt-1 text-xs text-gray-500">No projects yet.</p>
-                ) : (
-                  <ul className="mt-1 space-y-1">
-                    {projects.map((name) => (
-                      <li
-                        key={name}
-                        className={`flex items-center justify-between gap-2 rounded border p-2 text-sm ${
-                          name === projectName
-                            ? 'border-blue-400 bg-blue-50'
-                            : 'border-gray-200'
-                        }`}
-                      >
-                        <span className="min-w-0 truncate">
-                          {name}
-                          {name === projectName && (
-                            <span className="ml-1 text-[11px] text-blue-600">(open)</span>
-                          )}
-                        </span>
-                        <span className="flex shrink-0 gap-1">
-                          <button
-                            className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
-                            onClick={() => void openProjectByName(name)}
-                          >
-                            Open
-                          </button>
-                          <button
-                            className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
-                            onClick={() => void deleteProjectByName(name)}
-                          >
-                            Delete
-                          </button>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              {/* Rename current */}
-              {projectName && (
-                <section>
-                  <h3 className="text-sm font-semibold text-gray-700">
-                    Rename current project
-                  </h3>
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
-                      placeholder={projectName}
-                      value={renameTo}
-                      onChange={(e) => setRenameTo(e.target.value)}
-                    />
-                    <button
-                      className="rounded border border-gray-300 px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                      disabled={renameTo.trim() === ''}
-                      onClick={() => {
-                        void renameCurrentProject(renameTo.trim());
-                        setRenameTo('');
-                      }}
-                    >
-                      Rename
-                    </button>
-                  </div>
-                </section>
-              )}
-            </>
-          )}
+            )}
+          </>
         </div>
       </div>
     </div>

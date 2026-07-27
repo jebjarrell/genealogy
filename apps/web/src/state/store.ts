@@ -969,10 +969,12 @@ export const useStore = create<AppState>((set, get) => {
         workspace: null,
         workspaceName: null,
         folderStatus: 'none',
-        projects: [],
         projectName: null,
         vaultDocs: [],
       });
+      // Projects also live in the browser now; re-derive the list from the
+      // session store rather than assuming disconnecting the folder empties it.
+      await get().refreshProjects();
     },
 
     refreshProjects: async () => {
@@ -1098,6 +1100,7 @@ export const useStore = create<AppState>((set, get) => {
         projectCreatedAt: createdAt,
         checklists,
         settings,
+        saveState: { status: 'idle', lastSavedAt: null },
         warnings: model.warnings,
         focalPersonId: null,
         view: null,
