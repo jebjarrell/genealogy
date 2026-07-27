@@ -1266,9 +1266,10 @@ export const useStore = create<AppState>((set, get) => {
       // somewhere they never asked for, leave it unreachable through the app
       // (the session copy wins in openProjectByName), and set it up to be
       // destroyed by a later Delete on what looks like a duplicate.
-      const folderIsOurs = workspace
-        ? (await workspace.compareSource(projectName, sourceHash ?? '')) === 'match'
-        : false;
+      const folderCmp = workspace
+        ? await workspace.compareSource(projectName, sourceHash ?? '')
+        : 'absent';
+      const folderIsOurs = folderCmp === 'match';
       const wsOk = folderIsOurs
         ? (await workspace!.renameProject(projectName, name)) !== null
         : false;
@@ -1287,9 +1288,11 @@ export const useStore = create<AppState>((set, get) => {
       // is leaving a folder project of the same name standing.
       const adjusted =
         name !== requested.trim() ? ` (adjusted from "${requested.trim()}")` : '';
+      // Only when there really is a foreign project standing under the old
+      // name - 'absent' means the folder simply had nothing there yet.
       const leftAlone =
-        workspace && !folderIsOurs
-          ? ` The workspace folder's own "${projectName}" was left untouched.`
+        folderCmp === 'differs' || folderCmp === 'unknown'
+          ? ` A different project is stored as "${projectName}" in the workspace folder; it was left exactly as it was.`
           : '';
       set({
         projectName: name,
