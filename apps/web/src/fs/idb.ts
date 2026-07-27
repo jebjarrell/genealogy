@@ -23,6 +23,15 @@ export function openDb(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
     if (!idbAvailable()) return resolve(null);
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    const settle = (db: IDBDatabase | null) => {
+      if (settled) {
+        db?.close(); // arrived after we gave up: close it rather than leak it
+        return;
+      }
+      settled = true;
+      resolve(db);
+    };
     req.onupgradeneeded = () => {
       const db = req.result;
       // v1 shipped with only `handles`; creating conditionally makes the upgrade
@@ -31,9 +40,9 @@ export function openDb(): Promise<IDBDatabase | null> {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => resolve(null);
-    req.onblocked = () => resolve(null);
+    req.onsuccess = () => settle(req.result);
+    req.onerror = () => settle(null);
+    req.onblocked = () => settle(null);
   });
 }
 
