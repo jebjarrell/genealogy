@@ -20,6 +20,13 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
   const reconnectWorkspace = useStore((s) => s.reconnectWorkspace);
 
   const [renameTo, setRenameTo] = useState('');
+  // Delete is irreversible and, for a browser-only project, acts on the only
+  // copy of the data in existence - years of manual work with no server and no
+  // backup - and its button sits 4px from Open. A two-step confirmation in the
+  // row itself (rather than window.confirm) keeps it testable and styled like
+  // the rest of the app. One name at a time: arming a second row disarms the
+  // first, and the armed row names what is about to be destroyed.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const supported = isFileSystemAccessSupported();
 
@@ -112,20 +119,43 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
                           </span>
                         )}
                       </span>
-                      <span className="flex shrink-0 gap-1">
-                        <button
-                          className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
-                          onClick={() => void openProjectByName(name)}
-                        >
-                          Open
-                        </button>
-                        <button
-                          className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
-                          onClick={() => void deleteProjectByName(name)}
-                        >
-                          Delete
-                        </button>
-                      </span>
+                      {pendingDelete === name ? (
+                        <span className="flex shrink-0 items-center gap-1">
+                          <span className="text-xs text-red-700">
+                            Delete &quot;{name}&quot; permanently?
+                          </span>
+                          <button
+                            className="rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-red-700"
+                            onClick={() => {
+                              setPendingDelete(null);
+                              void deleteProjectByName(name);
+                            }}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
+                            onClick={() => setPendingDelete(null)}
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <span className="flex shrink-0 gap-1">
+                          <button
+                            className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
+                            onClick={() => void openProjectByName(name)}
+                          >
+                            Open
+                          </button>
+                          <button
+                            className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+                            onClick={() => setPendingDelete(name)}
+                          >
+                            Delete…
+                          </button>
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
