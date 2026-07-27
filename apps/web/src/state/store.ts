@@ -302,7 +302,8 @@ export interface AppState extends InternalState {
   refreshProjects: () => Promise<void>;
   refreshVault: () => Promise<void>;
   openProjectByName: (name: string) => Promise<void>;
-  renameCurrentProject: (name: string) => Promise<void>;
+  /** Rename the open project. The name is sanitized; collisions are refused. */
+  renameCurrentProject: (requestedName: string) => Promise<void>;
   deleteProjectByName: (name: string) => Promise<void>;
   addVaultDocument: (file: File) => Promise<{ deduped: boolean; name: string } | null>;
 
@@ -1181,16 +1182,86 @@ export const useStore = create<AppState>((set, get) => {
       await get().refreshVault();
     },
 
-    renameCurrentProject: async (name) => {
+    renameCurrentProject: async (requested) => {
       const { projectName } = get();
       if (!projectName) return;
+
+      // These become Windows directory names, which is the whole reason
+      // sanitizeProjectName exists - but only importGedcom was calling it.
+      // "Wills/Deeds" made the folder rename throw (swallowed), the session
+      // rename succeed, and the app adopt a name every later folder write
+      // would throw on: a permanent "Can't write to the workspace folder"
+      // banner with a Reconnect button that could never fix it.
+      const name = sanitizeProjectName(requested);
+
+      if (name === projectName) {
+        // Asking for the name it already has is not an error, and must not be
+        // allowed to reach the renames below, where "rename onto yourself"
+        // means copy-then-delete-the-original.
+        set({ notice: `"${projectName}" already has that name.` });
+        return;
+      }
+      if (name.toLowerCase() === projectName.toLowerCase()) {
+        // A letters-only case change. On Windows (and on the File System
+        // Access API over it) the target directory *is* the source directory,
+        // so renameProject would copy the project onto itself and then delete
+        // it. Refuse loudly rather than destroy a tree to restyle its name.
+        set({
+          notice: `"${projectName}" already has that name — folder names ignore capitalisation, so nothing was changed.`,
+        });
+        return;
+      }
+
       // Settle any pending save under the OLD name and disarm both timers
       // first. A debounce firing partway through the renames below would write
       // the old record straight back, leaving a duplicate the rename just moved.
       await get().flushSaves();
-      const { workspace, session } = get();
-      const wsOk = workspace
-        ? (await workspace.renameProject(projectName, name)) !== null
+      const { workspace, session, sourceHash } = get();
+
+      // Collision guard. Neither backend has one of its own: Workspace.rename
+      // opens the target directory with create=true (getting the *existing*
+      // one), writes our files into it and then recursively deletes our old
+      // folder, while IdbSessionStore.renameProject puts straight over
+      // whatever record sits under the target key. uniqueProjectName hands out
+      // names like "Smith Tree (2)" precisely so people rename them back to
+      // "Smith Tree", so this is one click away, and it would destroy the
+      // original in the browser and on disk simultaneously.
+      let folderNames: string[];
+      try {
+        folderNames = workspace ? await workspace.listProjects() : [];
+      } catch {
+        // A folder we cannot list is a folder we cannot check for collisions.
+        // Refuse the whole rename rather than do half of it.
+        set({
+          notice: `Could not rename "${projectName}" — the workspace folder could not be read.`,
+        });
+        return;
+      }
+      const sessionNames = session
+        ? (await session.listProjects()).map((r) => r.name)
+        : [];
+      // Case-insensitively, because these are Windows directory names. Our own
+      // name cannot be in the way here: both spellings of "same name" returned
+      // above.
+      const target = name.toLowerCase();
+      if ([...folderNames, ...sessionNames].some((n) => n.toLowerCase() === target)) {
+        set({
+          notice: `A project named "${name}" already exists. Renaming onto it would replace it, so nothing was changed.`,
+        });
+        return;
+      }
+
+      // Only rename a folder project that is provably ours. `name-conflict` is
+      // set precisely when the folder project sharing our name is a *different*
+      // tree; renaming then would move the user's untouched on-disk tree
+      // somewhere they never asked for, leave it unreachable through the app
+      // (the session copy wins in openProjectByName), and set it up to be
+      // destroyed by a later Delete on what looks like a duplicate.
+      const folderIsOurs = workspace
+        ? (await workspace.compareSource(projectName, sourceHash ?? '')) === 'match'
+        : false;
+      const wsOk = folderIsOurs
+        ? (await workspace!.renameProject(projectName, name)) !== null
         : false;
       const sessionOk = session
         ? (await session.renameProject(projectName, name)) !== null
@@ -1202,7 +1273,19 @@ export const useStore = create<AppState>((set, get) => {
         set({ notice: `Could not rename "${projectName}".` });
         return;
       }
-      set({ projectName: name, notice: `Renamed to "${name}".` });
+      // Say what actually happened. Renaming to a name the user did not type
+      // (because it had to be made legal) is not a silent success, and neither
+      // is leaving a folder project of the same name standing.
+      const adjusted =
+        name !== requested.trim() ? ` (adjusted from "${requested.trim()}")` : '';
+      const leftAlone =
+        workspace && !folderIsOurs
+          ? ` The workspace folder's own "${projectName}" was left untouched.`
+          : '';
+      set({
+        projectName: name,
+        notice: `Renamed to "${name}"${adjusted}.${leftAlone}`,
+      });
       persist(get);
       await get().refreshProjects();
     },

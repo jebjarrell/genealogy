@@ -354,6 +354,118 @@ describe('renameCurrentProject', () => {
     expect(await session.getLastProject()).toBe('family');
   });
 
+  // Final review, item 1. uniqueProjectName hands out "tree (2)" precisely so
+  // that people rename them back to "tree", and neither backend has a
+  // collision guard of its own: Workspace.renameProject opens the target
+  // directory with create=true (getting the existing one), writes our files
+  // into it, then recursively deletes ours; IdbSessionStore.renameProject puts
+  // straight over whatever record is under the target key. One click, no
+  // confirmation, original destroyed in the browser and on disk at once.
+  it('refuses to rename onto an existing project, destroying nothing in either backend', async () => {
+    const workspace = new Workspace(new MemDir());
+    useStore.setState({ workspace, folderStatus: 'connected' });
+
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+    const originalHash = useStore.getState().sourceHash!;
+
+    await useStore.getState().importGedcom(bytes(OTHER_GED), 'tree.ged');
+    await useStore.getState().flushSaves();
+    expect(useStore.getState().projectName).toBe('tree (2)');
+
+    await useStore.getState().renameCurrentProject('tree');
+
+    expect(useStore.getState().projectName).toBe('tree (2)');
+    expect(useStore.getState().notice).toContain('already exists');
+    // The original is intact in both copies, still holding its own tree.
+    expect((await session.getProject('tree'))!.sourceHash).toBe(originalHash);
+    expect((await session.getProject('tree (2)'))!.sourceHash).not.toBe(originalHash);
+    expect(await workspace.listProjects()).toEqual(['tree', 'tree (2)']);
+    expect(
+      new TextDecoder().decode((await workspace.openProject('tree'))!.gedcomBytes),
+    ).toBe(pedigreeGed);
+  });
+
+  it('refuses a case-only rename, which on Windows renames a folder onto itself', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'Smith Tree.ged');
+    await useStore.getState().flushSaves();
+
+    await useStore.getState().renameCurrentProject('smith tree');
+
+    expect(useStore.getState().projectName).toBe('Smith Tree');
+    expect((await session.getProject('Smith Tree'))!.ops).toEqual([]);
+    expect(await session.getProject('smith tree')).toBeNull();
+  });
+
+  it('treats renaming to the current name as a no-op, not an error', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+
+    await useStore.getState().renameCurrentProject('tree');
+
+    expect(useStore.getState().projectName).toBe('tree');
+    expect(useStore.getState().notice).not.toContain('Could not');
+    expect((await session.listProjects()).map((r) => r.name)).toEqual(['tree']);
+  });
+
+  // Final review, item 2. The name-conflict banner told the user to rename -
+  // and renameCurrentProject then opened the folder under OUR name, which in
+  // that state is the FOREIGN project, copied its files to the new name and
+  // deleted the original. The user's untouched on-disk tree was moved
+  // somewhere they never asked for, made unreachable through the app (the
+  // session copy wins in openProjectByName), and left looking like a duplicate
+  // for a later Delete to finish off.
+  it('leaves a foreign folder project of the same name exactly where it is', async () => {
+    const workspace = new Workspace(new MemDir());
+    await workspace.createProject(
+      'tree',
+      bytes(OTHER_GED),
+      'other.ged',
+      'foreign-hash',
+    );
+    useStore.setState({ workspace, folderStatus: 'connected' });
+
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    // Reproduce the state the banner appears in: our project and the folder's
+    // share a name, and the mirror has refused.
+    useStore.setState({ projectName: 'tree' });
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+    expect(useStore.getState().folderStatus).toBe('name-conflict');
+
+    await useStore.getState().renameCurrentProject('family');
+
+    // Ours moved; theirs did not.
+    expect(useStore.getState().projectName).toBe('family');
+    expect(await session.getProject('family')).not.toBeNull();
+    const theirs = await workspace.openProject('tree');
+    expect(new TextDecoder().decode(theirs!.gedcomBytes)).toBe(OTHER_GED);
+    expect(theirs!.project.sourceHash).toBe('foreign-hash');
+    expect(theirs!.project.ops).toHaveLength(0);
+
+    // And the mirror recovers: ours is now written under the new name, beside
+    // the folder project it refused to touch.
+    await useStore.getState().flushSaves();
+    expect(await workspace.listProjects()).toEqual(['family', 'tree']);
+    expect((await workspace.openProject('family'))!.project.ops).toHaveLength(1);
+    expect(useStore.getState().folderStatus).toBe('connected');
+  });
+
+  // Final review, item 8: sanitizeProjectName exists because these are Windows
+  // directory names, but only importGedcom was calling it.
+  it('sanitizes the requested name instead of adopting an illegal one', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+
+    await useStore.getState().renameCurrentProject('Wills/Deeds');
+
+    expect(useStore.getState().projectName).toBe('Wills Deeds');
+    expect(useStore.getState().notice).toContain('adjusted');
+    expect(await session.getProject('Wills Deeds')).not.toBeNull();
+    expect(await session.getProject('tree')).toBeNull();
+    expect(await session.getLastProject()).toBe('Wills Deeds');
+  });
+
   it('reports a failure and keeps the old name when both backends refuse', async () => {
     await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
     await useStore.getState().flushSaves();
