@@ -122,11 +122,25 @@ interface PermissionedHandle {
 }
 
 /**
- * Ensure read/write permission on a (possibly persisted) directory handle,
- * re-prompting if the browser dropped the grant across reloads. Returns true
- * when permission is granted.
+ * Query an existing permission grant WITHOUT prompting. Safe to call on page
+ * load: `requestPermission()` requires transient user activation, so prompting
+ * during boot can never succeed and merely fails silently.
  */
-export async function ensurePermission(handle: unknown): Promise<boolean> {
+export async function hasPermission(handle: unknown): Promise<boolean> {
+  const h = handle as PermissionedHandle;
+  try {
+    if (!h.queryPermission) return false;
+    return (await h.queryPermission({ mode: 'readwrite' })) === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure read/write permission, prompting if needed. MUST be called from within
+ * a user gesture (a click handler) or the prompt will be suppressed.
+ */
+export async function requestPermissionInteractive(handle: unknown): Promise<boolean> {
   const h = handle as PermissionedHandle;
   const opts = { mode: 'readwrite' as const };
   try {

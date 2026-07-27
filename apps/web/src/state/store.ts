@@ -22,7 +22,7 @@ import {
 } from '@genealogy/core';
 import { buildView, focalGenerations, pathsToHighlight } from './viewModel.js';
 import { Workspace } from '../fs/workspace.js';
-import { dirFromHandle, ensurePermission, pickDirectory } from '../fs/fsa.js';
+import { dirFromHandle, hasPermission, requestPermissionInteractive, pickDirectory } from '../fs/fsa.js';
 import { saveHandle, loadHandle, clearHandle } from '../fs/handleStore.js';
 import { sha256Hex } from '../fs/hash.js';
 import {
@@ -33,6 +33,7 @@ import {
   type SarChecklistState,
 } from '../fs/project.js';
 import type { VaultDoc } from '../fs/vault.js';
+import type { FolderStatus } from './persistence.js';
 
 export const NODE_BUDGET = 300;
 
@@ -250,6 +251,9 @@ export interface AppState extends InternalState {
   projects: string[];
   projectName: string | null;
   sourceHash: string | null;
+  folderStatus: FolderStatus;
+  reconnectWorkspace: () => Promise<void>;
+  backfillFolder: () => Promise<void>;
   vaultDocs: VaultDoc[];
   checklists: SarChecklistState[];
   settings: ProjectSettings;
@@ -466,6 +470,7 @@ export const useStore = create<AppState>((set, get) => {
     projects: [],
     projectName: null,
     sourceHash: null,
+    folderStatus: 'none',
     vaultDocs: [],
     checklists: [],
     settings: { ...DEFAULT_SETTINGS },
@@ -766,7 +771,7 @@ export const useStore = create<AppState>((set, get) => {
     connectWorkspace: async () => {
       const handle = await pickDirectory();
       if (!handle) return;
-      if (!(await ensurePermission(handle))) {
+      if (!(await requestPermissionInteractive(handle))) {
         set({ notice: 'Permission to the workspace folder was denied.' });
         return;
       }
@@ -783,16 +788,51 @@ export const useStore = create<AppState>((set, get) => {
 
     restoreWorkspace: async () => {
       const handle = await loadHandle();
-      if (!handle) return;
-      if (!(await ensurePermission(handle))) return; // user can re-grant from the UI
+      if (!handle) {
+        set({ folderStatus: 'none' });
+        return;
+      }
+      if (!(await hasPermission(handle))) {
+        // The grant lapsed. Surface a Reconnect control rather than failing mute;
+        // re-granting needs a user gesture we do not have here.
+        set({ folderStatus: 'needs-permission' });
+        return;
+      }
       const ws = new Workspace(dirFromHandle(handle));
       set({
         workspace: ws,
         workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
       });
       await get().refreshProjects();
       await get().refreshVault();
     },
+
+    /** Re-grant permission to the remembered folder. Must be called from a click. */
+    reconnectWorkspace: async () => {
+      const handle = await loadHandle();
+      if (!handle) {
+        await get().connectWorkspace();
+        return;
+      }
+      if (!(await requestPermissionInteractive(handle))) {
+        set({ folderStatus: 'needs-permission', notice: 'Folder permission was denied.' });
+        return;
+      }
+      const ws = new Workspace(dirFromHandle(handle));
+      set({
+        workspace: ws,
+        workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
+        notice: 'Workspace reconnected.',
+      });
+      await get().refreshProjects();
+      await get().refreshVault();
+      await get().backfillFolder();
+    },
+
+    /** Stub; replaced in Task 8 with the real folder backfill. */
+    backfillFolder: async () => {},
 
     disconnectWorkspace: async () => {
       await clearHandle();
