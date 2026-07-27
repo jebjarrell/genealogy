@@ -398,4 +398,31 @@ describe('SaveScheduler', () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(spy).toHaveBeenCalledTimes(1); // not skipped by a cache from the old store
   });
+
+  // Regression test: two tabs open on the same project. Both autosave to the
+  // same session-store record; without detection, last-write-wins silently
+  // drops whichever tab saved second. This pins that the losing tab notices
+  // the record moved out from under it and stops writing rather than
+  // clobbering the other tab's work.
+  it('stops saving and reports a conflict when another tab wrote the record', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    // Another tab writes the same record behind our back.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree']);
+    // The other tab's write survived; we did not clobber it.
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
 });

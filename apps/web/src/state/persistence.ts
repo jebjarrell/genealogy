@@ -126,6 +126,8 @@ export interface SaveSchedulerOptions {
   workspace: () => Workspace | null;
   onSaveState: (status: SaveStatus, at: string | null) => void;
   onFolderState: (status: FolderStatus) => void;
+  /** Called when another tab has written this project since our last save. */
+  onConflict?: (name: string) => void;
 }
 
 export class SaveScheduler {
@@ -135,6 +137,20 @@ export class SaveScheduler {
   private readonly storedSources = new Set<string>();
   /** The session store the cache above was built against; see runSession(). */
   private lastSession: SessionStore | null = null;
+  /**
+   * updatedAt we last wrote, per project name - this tab's claim on the
+   * record. Absent means either this tab has never saved that project this
+   * session, or the session store instance changed since (see runSession()),
+   * in both cases there is no claim to compare against, so no conflict check
+   * runs and a healthy single-tab session is never blocked spuriously.
+   */
+  private readonly lastWritten = new Map<string, string>();
+  /**
+   * Once true, stays true for the lifetime of this scheduler: a losing tab
+   * must stop saving permanently, not just for one debounce cycle, or it
+   * would silently resume clobbering the winning tab's work.
+   */
+  private conflicted = false;
 
   constructor(private readonly opts: SaveSchedulerOptions) {
     this.sessionSave = new Debounced(SESSION_DEBOUNCE_MS, () => this.runSession());
@@ -160,20 +176,42 @@ export class SaveScheduler {
   private async runSession(): Promise<void> {
     const snap = this.opts.snapshot();
     const session = this.opts.session();
-    if (!snap || !session) return;
+    // Once conflicted, stay stopped - see the `conflicted` field comment.
+    if (!snap || !session || this.conflicted) return;
 
     // `session` is a getter, not a fixed reference - the host can hand back a
     // different SessionStore instance (e.g. after a storage reconnect). The
     // stored-sources cache is only valid against the store it was built
     // against, so drop it when the instance changes rather than trusting
     // hashes that may only exist in a store we are no longer writing to.
+    // The same applies to our conflict-detection claim below: it was staked
+    // against the old instance, so treat it as unknown against the new one
+    // rather than risk comparing it to unrelated data and firing a spurious
+    // conflict against a perfectly healthy single tab.
     if (session !== this.lastSession) {
       this.storedSources.clear();
+      this.lastWritten.clear();
       this.lastSession = session;
     }
 
     this.opts.onSaveState('saving', null);
     try {
+      // If the stored record has moved on from what we last wrote, another
+      // tab has written it since - stop rather than overwrite work we cannot
+      // see. No claim (first save this session, or a project this tab has
+      // not yet written) means nothing to compare against, so a healthy
+      // single-tab session is never blocked here.
+      const claimed = this.lastWritten.get(snap.record.name);
+      if (claimed !== undefined) {
+        const current = await session.getProject(snap.record.name);
+        if (current && current.updatedAt !== claimed) {
+          this.conflicted = true;
+          this.opts.onSaveState('error', null);
+          this.opts.onConflict?.(snap.record.name);
+          return;
+        }
+      }
+
       if (snap.sourceBytes && !this.storedSources.has(snap.record.sourceHash)) {
         if (!(await session.hasSource(snap.record.sourceHash))) {
           await session.putSource(snap.record.sourceHash, snap.sourceBytes);
@@ -194,16 +232,18 @@ export class SaveScheduler {
         }
         this.storedSources.add(snap.record.sourceHash);
       }
-      const ok = await session.putProject({
-        ...snap.record,
-        updatedAt: new Date().toISOString(),
-      });
+      const updatedAt = new Date().toISOString();
+      const ok = await session.putProject({ ...snap.record, updatedAt });
       if (ok) {
         // Only point "last project" at a record that is actually there - a
         // failed write must not leave a dangling pointer that a later reload
         // would try (and fail) to restore.
         await session.setLastProject(snap.record.name);
-        this.opts.onSaveState('saved', new Date().toISOString());
+        // This is now our claim on the record: the next run compares the
+        // stored updatedAt against this value to notice if another tab wrote
+        // over it in between.
+        this.lastWritten.set(snap.record.name, updatedAt);
+        this.opts.onSaveState('saved', updatedAt);
       } else {
         this.opts.onSaveState('error', null);
       }

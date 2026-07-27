@@ -1286,4 +1286,8 @@ scheduler = new SaveScheduler({
       saveState: { status, lastSavedAt: at ?? s.saveState.lastSavedAt },
     })),
   onFolderState: (status) => useStore.setState({ folderStatus: status }),
+  onConflict: (name) =>
+    useStore.setState({
+      notice: `"${name}" is open in another tab. Editing is no longer being saved here - close this tab or reload to continue.`,
+    }),
 });
