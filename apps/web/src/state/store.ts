@@ -83,11 +83,19 @@ export interface Highlight {
 let scheduler: SaveScheduler | null = null;
 
 function snapshotOf(s: AppState): SaveSnapshot | null {
-  if (!s.projectName || !s.baseModel) return null;
+  // A falsy sourceHash ('' or null) is not a real content hash - it is the
+  // "unknown" placeholder ProjectFile documents for pre-existing records. That
+  // placeholder must never be treated as a key into the content-addressed
+  // source store: two different projects with an unknown hash would collide
+  // on the same '' key, and the second putSource() would be skipped as
+  // "already stored", leaving its record pointing at the first project's
+  // GEDCOM bytes. Refusing to save is strictly better than saving under a
+  // colliding key.
+  if (!s.projectName || !s.baseModel || !s.sourceHash) return null;
   return {
     record: {
       name: s.projectName,
-      sourceHash: s.sourceHash ?? '',
+      sourceHash: s.sourceHash,
       sourceFileName: s.fileName ?? 'source.ged',
       focalPersonId: s.focalPersonId,
       ops: s.ops,
@@ -713,6 +721,14 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     importGedcom: async (bytes, fileName) => {
+      // Flush whatever project is currently open before we start reassigning
+      // state out from under it. The scheduler snapshots at *run* time, so an
+      // outgoing project's pending debounce would otherwise silently get
+      // repointed at the incoming one by the `persist(get)` below (which just
+      // reschedules the same timer) - discarding, not deferring, any edit
+      // made in the last 300ms/1s.
+      await get().flushSaves();
+
       const hash = await sha256Hex(bytes);
       const { session, workspace } = get();
 
@@ -721,7 +737,12 @@ export const useStore = create<AppState>((set, get) => {
       const sessionHit = records.find((r) => r.sourceHash === hash);
       if (sessionHit) {
         await get().openProjectByName(sessionHit.name);
-        set({ notice: `Reopened "${sessionHit.name}".` });
+        // openProjectByName has a real failure path (bad/missing project);
+        // only claim success if the open actually landed - otherwise leave
+        // its own failure notice in place rather than paving over it.
+        if (get().projectName === sessionHit.name) {
+          set({ notice: `Reopened "${sessionHit.name}".` });
+        }
         return;
       }
       if (workspace) {
@@ -729,13 +750,28 @@ export const useStore = create<AppState>((set, get) => {
         const folderHit = summaries.find((p) => p.sourceHash === hash);
         if (folderHit) {
           await get().openProjectByName(folderHit.name);
-          set({ notice: `Reopened "${folderHit.name}".` });
+          if (get().projectName === folderHit.name) {
+            set({ notice: `Reopened "${folderHit.name}".` });
+          }
           return;
         }
       }
 
-      // 2. New content: create a project named from the file.
-      const taken = [...records.map((r) => r.name), ...get().projects];
+      // 2. New content: create a project named from the file. Seed `taken`
+      // with the project currently open (it may not appear in `records` or a
+      // folder listing yet - nothing has autosaved it there) and a *fresh*
+      // folder name listing rather than the cached `projects`, which can lag
+      // a folder create still sitting behind its own debounce. Without both,
+      // two different files that happen to share a name can be assigned the
+      // same project name, and the second autosave silently overwrites the
+      // first project's op-log and source hash while its GEDCOM stays on disk.
+      const currentName = get().projectName;
+      const folderNames = workspace ? await workspace.listProjects() : get().projects;
+      const taken = [
+        ...records.map((r) => r.name),
+        ...folderNames,
+        ...(currentName ? [currentName] : []),
+      ];
       const name = uniqueProjectName(sanitizeProjectName(fileName), taken);
       const now = new Date().toISOString();
 

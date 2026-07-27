@@ -60,6 +60,20 @@ describe('importGedcom — auto-creates a project', () => {
     expect(names).toEqual(['tree', 'tree (2)']);
   });
 
+  it('names distinct projects for different bytes sharing a filename even with no flush and no backend to consult', async () => {
+    // No session store and no workspace: nothing autosaves anywhere, so the
+    // only thing that can prevent the second import from colliding onto the
+    // first project's name is seeding `taken` with the currently-open
+    // project name (get().projectName), not the (empty) session/folder
+    // listings.
+    useStore.getState().setSessionStore(null);
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    expect(useStore.getState().projectName).toBe('tree');
+
+    await useStore.getState().importGedcom(bytes(cousinsGed), 'tree.ged');
+    expect(useStore.getState().projectName).toBe('tree (2)');
+  });
+
   it('autosaves an edit made after import without any explicit save', async () => {
     await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
     useStore.getState().setFocal('I11');
