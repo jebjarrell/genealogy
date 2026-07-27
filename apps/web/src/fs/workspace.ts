@@ -63,6 +63,26 @@ export class Workspace {
     return (await this.listProjects()).includes(name);
   }
 
+  /**
+   * Name + content hash for every project on disk. Used to match an imported
+   * GEDCOM against existing folder projects without reading their sources.
+   * Folders without a readable project.json are skipped rather than failing
+   * the whole listing.
+   */
+  async listProjectSummaries(): Promise<{ name: string; sourceHash: string }[]> {
+    const out: { name: string; sourceHash: string }[] = [];
+    const parent = await this.projectsDir(false);
+    if (!parent) return out;
+    for (const name of await this.listProjects()) {
+      const dir = await parent.getDir(name, false);
+      const file = dir ? await dir.getFile(PROJECT_JSON, false) : null;
+      if (!file) continue;
+      const project = parseProject(await file.readText());
+      if (project) out.push({ name, sourceHash: project.sourceHash });
+    }
+    return out;
+  }
+
   /** Atomically write project.json into the given project folder. */
   private async writeProjectFile(dir: FsDir, project: ProjectFile): Promise<void> {
     const text = serializeProject({ ...project, updatedAt: new Date().toISOString() });
@@ -77,6 +97,7 @@ export class Workspace {
     name: string,
     gedcomBytes: Uint8Array,
     sourceFileName: string,
+    sourceHash = '',
   ): Promise<ProjectFile> {
     const parent = await this.projectsDir(true);
     if (!parent) throw new Error('Cannot open the projects folder.');
@@ -86,7 +107,7 @@ export class Workspace {
     const source = await dir.getFile(SOURCE_GED, true);
     if (source) await source.write(gedcomBytes);
 
-    const project = newProject(name, sourceFileName, SOURCE_GED);
+    const project = newProject(name, sourceFileName, SOURCE_GED, sourceHash);
     await this.writeProjectFile(dir, project);
     return project;
   }

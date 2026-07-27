@@ -30,6 +30,8 @@ export interface ProjectFile {
   sourceFile: string;
   /** The original upload filename, for display and export naming. */
   sourceFileName: string;
+  /** sha256 hex of the GEDCOM bytes; '' for projects written before this field. */
+  sourceHash: string;
   focalPersonId: string | null;
   /** Unified edit op-log: merges + manual add/edit, replayed over the source. */
   ops: EditOp[];
@@ -45,6 +47,7 @@ export function newProject(
   name: string,
   sourceFileName: string,
   sourceFile = 'source.ged',
+  sourceHash = '',
 ): ProjectFile {
   return {
     format: 'genealogy-graph/project',
@@ -52,6 +55,7 @@ export function newProject(
     name,
     sourceFile,
     sourceFileName,
+    sourceHash,
     focalPersonId: null,
     ops: [],
     checklists: [],
@@ -86,6 +90,7 @@ export function parseProject(text: string): ProjectFile | null {
     sourceFile: typeof r.sourceFile === 'string' ? r.sourceFile : 'source.ged',
     sourceFileName:
       typeof r.sourceFileName === 'string' ? r.sourceFileName : 'source.ged',
+    sourceHash: typeof r.sourceHash === 'string' ? r.sourceHash : '',
     focalPersonId: typeof r.focalPersonId === 'string' ? r.focalPersonId : null,
     ops: Array.isArray(r.ops) ? (r.ops as EditOp[]) : [],
     checklists: Array.isArray(r.checklists)

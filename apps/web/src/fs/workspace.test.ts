@@ -122,3 +122,34 @@ describe('project (de)serialization', () => {
     expect(parseProject('not json')).toBeNull();
   });
 });
+
+describe('Workspace — source hashing for import matching', () => {
+  it('stores a sourceHash on create and reports it in summaries', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Hashed', GED, 'h.ged', 'deadbeef');
+    expect((await ws.openProject('Hashed'))!.project.sourceHash).toBe('deadbeef');
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Hashed', sourceHash: 'deadbeef' },
+    ]);
+  });
+
+  it('defaults sourceHash to empty string for projects written before this field', () => {
+    const legacy = JSON.stringify({
+      format: 'genealogy-graph/project',
+      version: 1,
+      name: 'Old',
+      sourceFile: 'source.ged',
+      sourceFileName: 'old.ged',
+    });
+    expect(parseProject(legacy)!.sourceHash).toBe('');
+  });
+
+  it('skips unreadable project folders when summarizing', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Good', GED, 'g.ged', 'aaa');
+    // A folder with no project.json — e.g. one the user created by hand.
+    const projects = await ws.root.getDir('projects', true);
+    await projects!.getDir('Empty', true);
+    expect(await ws.listProjectSummaries()).toEqual([{ name: 'Good', sourceHash: 'aaa' }]);
+  });
+});
