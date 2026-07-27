@@ -90,7 +90,9 @@ export class Workspace {
    * name check what is on disk without paying for a full listing - the autosave
    * mirror does this on every run.
    */
-  async projectSummary(name: string): Promise<{ name: string; sourceHash: string } | null> {
+  async projectSummary(
+    name: string,
+  ): Promise<{ name: string; sourceHash: string } | null> {
     const parent = await this.projectsDir(false);
     return parent ? this.readSummary(parent, name) : null;
   }
@@ -270,7 +272,9 @@ export class Workspace {
   }
 
   /** Read a stored document's bytes (for preview / open). */
-  async readDocument(docId: string): Promise<{ bytes: Uint8Array; doc: VaultDoc } | null> {
+  async readDocument(
+    docId: string,
+  ): Promise<{ bytes: Uint8Array; doc: VaultDoc } | null> {
     const index = await this.readVaultIndex();
     const doc = index.documents.find((d) => d.docId === docId);
     if (!doc) return null;

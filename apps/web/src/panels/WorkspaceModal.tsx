@@ -27,7 +27,9 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-gray-200 p-3">
-          <h2 className="text-base font-bold text-gray-900">Workspace &amp; projects</h2>
+          <h2 className="text-base font-bold text-gray-900">
+            Workspace &amp; projects
+          </h2>
           <button className="text-gray-400 hover:text-gray-700" onClick={onClose}>
             ✕
           </button>
@@ -37,8 +39,8 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
           {!supported && (
             <p className="rounded bg-amber-50 p-2 text-xs text-amber-800">
               This browser doesn’t support the File System Access API. Your work still
-              persists locally in this browser; folder-backed projects need a Chromium-based
-              browser.
+              persists locally in this browser; folder-backed projects need a
+              Chromium-based browser.
             </p>
           )}
 

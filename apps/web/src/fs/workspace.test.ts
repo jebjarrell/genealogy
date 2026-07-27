@@ -82,12 +82,16 @@ describe('Workspace — vault (content-hash dedup)', () => {
   });
 
   it('adds a PDF and records it in the manifest', async () => {
-    const res = await ws.addDocument(bytes('%PDF-1.4 cert'), 'birth.pdf', 'application/pdf');
+    const res = await ws.addDocument(
+      bytes('%PDF-1.4 cert'),
+      'birth.pdf',
+      'application/pdf',
+    );
     expect(res).not.toBeNull();
     expect(res!.deduped).toBe(false);
     expect(res!.doc.mimetype).toBe('application/pdf');
     expect(res!.doc.filename.endsWith('.pdf')).toBe(true);
-    expect((await ws.listDocuments())).toHaveLength(1);
+    expect(await ws.listDocuments()).toHaveLength(1);
   });
 
   it('dedupes identical bytes instead of storing a second copy', async () => {
@@ -95,7 +99,7 @@ describe('Workspace — vault (content-hash dedup)', () => {
     const b = await ws.addDocument(bytes('same'), 'again.png', 'image/png');
     expect(b!.deduped).toBe(true);
     expect(b!.doc.docId).toBe(a!.doc.docId);
-    expect((await ws.listDocuments())).toHaveLength(1);
+    expect(await ws.listDocuments()).toHaveLength(1);
   });
 
   it('rejects unsupported file types', async () => {
@@ -150,7 +154,9 @@ describe('Workspace — source hashing for import matching', () => {
     // A folder with no project.json - e.g. one the user created by hand.
     const projects = await ws.root.getDir('projects', true);
     await projects!.getDir('Empty', true);
-    expect(await ws.listProjectSummaries()).toEqual([{ name: 'Good', sourceHash: 'aaa' }]);
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Good', sourceHash: 'aaa' },
+    ]);
   });
 
   it('skips malformed project.json when summarizing', async () => {
@@ -161,6 +167,8 @@ describe('Workspace — source hashing for import matching', () => {
     const badDir = await projects!.getDir('Bad', true);
     const badFile = await badDir!.getFile('project.json', true);
     await badFile!.write('{not valid json}');
-    expect(await ws.listProjectSummaries()).toEqual([{ name: 'Good', sourceHash: 'bbb' }]);
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Good', sourceHash: 'bbb' },
+    ]);
   });
 });

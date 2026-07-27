@@ -79,7 +79,9 @@ describe('App — save status and folder banner', () => {
   it('shows name-conflict copy with no Reconnect action, since reconnecting cannot fix it', () => {
     useStore.setState({ projectName: 'tree', folderStatus: 'name-conflict' });
     render(<App />);
-    expect(screen.getByText(/already exists in your workspace folder/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/already exists in your workspace folder/),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Reconnect/ })).toBeNull();
   });
 
@@ -102,7 +104,9 @@ describe('App — save status and folder banner', () => {
     act(() => {
       useStore.setState({ folderStatus: 'name-conflict' });
     });
-    expect(screen.getByText(/already exists in your workspace folder/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/already exists in your workspace folder/),
+    ).toBeInTheDocument();
   });
 
   it('flushes pending saves on visibilitychange(hidden) and pagehide, and stops after unmount', () => {

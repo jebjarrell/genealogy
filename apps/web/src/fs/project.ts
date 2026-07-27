@@ -97,8 +97,7 @@ export function parseProject(text: string): ProjectFile | null {
       ? (r.checklists as SarChecklistState[])
       : [],
     settings: {
-      orientation:
-        r.settings?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
+      orientation: r.settings?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
     },
     updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : new Date().toISOString(),
   };

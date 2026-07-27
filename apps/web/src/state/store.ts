@@ -22,7 +22,12 @@ import {
 } from '@genealogy/core';
 import { buildView, focalGenerations, pathsToHighlight } from './viewModel.js';
 import { Workspace } from '../fs/workspace.js';
-import { dirFromHandle, hasPermission, requestPermissionInteractive, pickDirectory } from '../fs/fsa.js';
+import {
+  dirFromHandle,
+  hasPermission,
+  requestPermissionInteractive,
+  pickDirectory,
+} from '../fs/fsa.js';
 import { saveHandle, loadHandle, clearHandle } from '../fs/handleStore.js';
 import { sha256Hex } from '../fs/hash.js';
 import { sanitizeProjectName, uniqueProjectName } from '../fs/projectName.js';
@@ -214,7 +219,11 @@ export interface AppState extends InternalState {
   flushSaves: () => Promise<void>;
 
   // ---- model loading ----
-  loadModel: (model: GenealogyModel, fileName: string, sourceBytes?: Uint8Array) => void;
+  loadModel: (
+    model: GenealogyModel,
+    fileName: string,
+    sourceBytes?: Uint8Array,
+  ) => void;
   setFocal: (personId: string) => void;
   selectPerson: (personId: string) => void;
   deselectPerson: (personId: string) => void;
@@ -244,13 +253,32 @@ export interface AppState extends InternalState {
   addEvent: (input: EventInput) => string | null;
   editEvent: (
     eventId: string,
-    patch: { eventType?: EventType; dateRaw?: string | null; placeRaw?: string | null; description?: string | null },
+    patch: {
+      eventType?: EventType;
+      dateRaw?: string | null;
+      placeRaw?: string | null;
+      description?: string | null;
+    },
   ) => void;
   linkRelationship: (
     relation: 'parent-child' | 'spouse',
-    ids: { parentId?: string; childId?: string; spouseAId?: string; spouseBId?: string },
+    ids: {
+      parentId?: string;
+      childId?: string;
+      spouseAId?: string;
+      spouseBId?: string;
+    },
   ) => void;
-  unlinkRelationship: (familyId: string, relation: 'parent-child' | 'spouse', ids: { parentId?: string; childId?: string; spouseAId?: string; spouseBId?: string }) => void;
+  unlinkRelationship: (
+    familyId: string,
+    relation: 'parent-child' | 'spouse',
+    ids: {
+      parentId?: string;
+      childId?: string;
+      spouseAId?: string;
+      spouseBId?: string;
+    },
+  ) => void;
 
   // ---- pedigree orientation ----
   setOrientation: (orientation: PedigreeOrientation) => void;
@@ -338,8 +366,14 @@ export const useStore = create<AppState>((set, get) => {
     redoStack: EditOp[],
     opts?: { addedIds?: string[]; focusId?: string; notice?: string | null },
   ): void => {
-    const { baseModel, focalPersonId, viewOptions, viewIds, detailPersonId, mapAncestorId } =
-      get();
+    const {
+      baseModel,
+      focalPersonId,
+      viewOptions,
+      viewIds,
+      detailPersonId,
+      mapAncestorId,
+    } = get();
     if (!baseModel) return;
     const model = applyOps(baseModel, nextOps);
     const graph = buildGraph(model);
@@ -364,7 +398,8 @@ export const useStore = create<AppState>((set, get) => {
           if (s) nextViewIds.add(s);
         }
         nextViewIds.add(focal);
-        for (const id of opts?.addedIds ?? []) if (model.persons.has(id)) nextViewIds.add(id);
+        for (const id of opts?.addedIds ?? [])
+          if (model.persons.has(id)) nextViewIds.add(id);
       }
       derived = {
         collapsePoints,
@@ -544,8 +579,15 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setViewOptions: (partial) => {
-      const { graph, model, focalPersonId, collapseSet, genMap, viewOptions, highlight } =
-        get();
+      const {
+        graph,
+        model,
+        focalPersonId,
+        collapseSet,
+        genMap,
+        viewOptions,
+        highlight,
+      } = get();
       const next = { ...viewOptions, ...partial };
       if (!graph || !model || !focalPersonId) {
         set({ viewOptions: next });
@@ -592,7 +634,11 @@ export const useStore = create<AppState>((set, get) => {
       applyOpLog(
         [...ops, { kind: 'merge', keepId, mergeId, at: new Date().toISOString() }],
         [],
-        { focusId: keepId, notice: 'Merged. Undo it any time from the Review tab.', addedIds: [keepId] },
+        {
+          focusId: keepId,
+          notice: 'Merged. Undo it any time from the Review tab.',
+          addedIds: [keepId],
+        },
       );
       set({ mergeOpen: false });
     },
@@ -673,7 +719,12 @@ export const useStore = create<AppState>((set, get) => {
 
     editEvent: (eventId, patch) => {
       const { ops } = get();
-      const op: EditOp = { kind: 'editEvent', eventId, at: new Date().toISOString(), ...patch };
+      const op: EditOp = {
+        kind: 'editEvent',
+        eventId,
+        at: new Date().toISOString(),
+        ...patch,
+      };
       applyOpLog([...ops, op], [], { notice: 'Event updated.' });
     },
 
@@ -840,7 +891,9 @@ export const useStore = create<AppState>((set, get) => {
           // Pointer survived but the bytes did not - clear it so the next boot
           // starts clean instead of hitting this every time.
           await session.setLastProject(null);
-          set({ notice: `Project "${record.name}" could not be restored — its source is missing.` });
+          set({
+            notice: `Project "${record.name}" could not be restored — its source is missing.`,
+          });
         } else if (lastName) {
           // Pointer to a record that is no longer there at all. Nothing worth
           // telling the user (the project is simply gone), but the dangling
@@ -915,7 +968,10 @@ export const useStore = create<AppState>((set, get) => {
         return;
       }
       if (!(await requestPermissionInteractive(handle))) {
-        set({ folderStatus: 'needs-permission', notice: 'Folder permission was denied.' });
+        set({
+          folderStatus: 'needs-permission',
+          notice: 'Folder permission was denied.',
+        });
         return;
       }
       const ws = new Workspace(dirFromHandle(handle));
@@ -1014,7 +1070,8 @@ export const useStore = create<AppState>((set, get) => {
       // Prefer the browser copy: it is authoritative and needs no permission,
       // so a reopen works with no folder connected at all.
       const record = session ? await session.getProject(name) : null;
-      const cached = record && session ? await session.getSource(record.sourceHash) : null;
+      const cached =
+        record && session ? await session.getSource(record.sourceHash) : null;
 
       let gedcomBytes: Uint8Array;
       let ops: EditOp[];
@@ -1027,7 +1084,8 @@ export const useStore = create<AppState>((set, get) => {
 
       if (record && cached) {
         gedcomBytes = cached;
-        ({ ops, checklists, settings, sourceHash, sourceFileName, focalPersonId } = record);
+        ({ ops, checklists, settings, sourceHash, sourceFileName, focalPersonId } =
+          record);
         createdAt = record.createdAt;
       } else {
         // Every exit from here sets a notice: a reopen that cannot proceed must
@@ -1086,7 +1144,8 @@ export const useStore = create<AppState>((set, get) => {
         notice: `Opened project "${name}".`,
         mapAncestorId: null,
       });
-      if (focalPersonId && model.persons.has(focalPersonId)) get().setFocal(focalPersonId);
+      if (focalPersonId && model.persons.has(focalPersonId))
+        get().setFocal(focalPersonId);
       else if (model.persons.size > 0) set({ focalPickerOpen: true });
 
       // Cache a folder-only project into the session store so the next cold
@@ -1171,7 +1230,10 @@ export const useStore = create<AppState>((set, get) => {
         proofs: [],
         createdAt: new Date().toISOString(),
       };
-      set((s) => ({ checklists: [...s.checklists, checklist], notice: 'Checklist created.' }));
+      set((s) => ({
+        checklists: [...s.checklists, checklist],
+        notice: 'Checklist created.',
+      }));
       persist(get);
       return id;
     },

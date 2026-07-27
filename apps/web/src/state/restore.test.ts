@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useStore } from './store.js';
 import { MemSessionStore } from '../fs/memSessionStore.js';
 import { Workspace } from '../fs/workspace.js';
 import { MemDir } from '../fs/memfs.js';
 import { sha256Hex } from '../fs/hash.js';
+import { SESSION_DEBOUNCE_MS } from './persistence.js';
 import pedigreeGed from '../../../../packages/core/tests/fixtures/pedigree-collapse.ged?raw';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
@@ -129,7 +130,12 @@ describe('backfillFolder', () => {
     await useStore.getState().flushSaves();
 
     const workspace = new Workspace(new MemDir());
-    await workspace.createProject('tree', bytes(OTHER_GED), 'other.ged', 'existing-hash');
+    await workspace.createProject(
+      'tree',
+      bytes(OTHER_GED),
+      'other.ged',
+      'existing-hash',
+    );
     useStore.setState({ workspace, folderStatus: 'connected' });
     await useStore.getState().backfillFolder();
 
@@ -148,7 +154,12 @@ describe('backfillFolder', () => {
     await useStore.getState().flushSaves();
 
     const workspace = new Workspace(new MemDir());
-    await workspace.createProject('tree', bytes(OTHER_GED), 'other.ged', 'existing-hash');
+    await workspace.createProject(
+      'tree',
+      bytes(OTHER_GED),
+      'other.ged',
+      'existing-hash',
+    );
     useStore.setState({ workspace, folderStatus: 'connected' });
     await useStore.getState().backfillFolder();
 
@@ -187,7 +198,9 @@ describe('backfillFolder', () => {
 
     // And the same for a pre-hash folder project opened through the store.
     await useStore.getState().openProjectByName('legacy');
-    useStore.getState().editPerson('I11', { nameRaws: ['Edited Again /Name/'], sex: 'male' });
+    useStore
+      .getState()
+      .editPerson('I11', { nameRaws: ['Edited Again /Name/'], sex: 'male' });
     await useStore.getState().flushSaves();
     expect((await workspace.openProject('legacy'))!.project.ops).toHaveLength(1);
     expect(useStore.getState().folderStatus).toBe('connected');
@@ -241,7 +254,12 @@ describe('openProjectByName', () => {
 
   it('caches a folder-only project into the session store on open', async () => {
     const workspace = new Workspace(new MemDir());
-    await workspace.createProject('ondisk', bytes(pedigreeGed), 'ondisk.ged', 'disk-hash');
+    await workspace.createProject(
+      'ondisk',
+      bytes(pedigreeGed),
+      'ondisk.ged',
+      'disk-hash',
+    );
 
     useStore.setState({ workspace, folderStatus: 'connected' });
     await useStore.getState().openProjectByName('ondisk');
@@ -261,7 +279,10 @@ describe('openProjectByName', () => {
   });
 
   it('reports a failure when the folder has no such project', async () => {
-    useStore.setState({ workspace: new Workspace(new MemDir()), folderStatus: 'connected' });
+    useStore.setState({
+      workspace: new Workspace(new MemDir()),
+      folderStatus: 'connected',
+    });
     await useStore.getState().openProjectByName('missing');
     expect(useStore.getState().notice).toContain('Could not open project');
   });
@@ -346,5 +367,56 @@ describe('renameCurrentProject', () => {
     // No duplicate left behind under the new name.
     session.failWrites = false;
     expect((await session.listProjects()).map((r) => r.name)).toEqual(['tree']);
+  });
+});
+
+// Task 10 fix round 1, finding 2: every persistence test above proves data
+// round-trips through a SessionStore, but every one of them gets there via an
+// explicit `await flushSaves()` - and SaveScheduler.flush() calls fire()
+// unconditionally, so it writes the current state whether or not any mutator
+// ever armed the debounce in the first place. That leaves the actual
+// production promise - "your edits save without you remembering to save,
+// ~300ms after you stop typing" - completely unverified. This test proves the
+// wiring itself: it never calls flushSaves(), so the only way the edit can
+// reach the store is through the mutator's own `persist(get)` call arming the
+// scheduler, followed by the real 300ms debounce elapsing on its own.
+describe('autosave wiring', () => {
+  let session: MemSessionStore;
+
+  beforeEach(() => {
+    useStore.setState(useStore.getInitialState(), true);
+    session = new MemSessionStore();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // Real timers restored before the next test's beforeEach runs - a leaked
+    // fake clock broke a later test earlier on this branch (see
+    // persistence.test.ts's own afterEach for the same guard).
+    vi.useRealTimers();
+    useStore.setState(useStore.getInitialState(), true);
+  });
+
+  it('arms the autosave debounce on a mutation, with no explicit flush', async () => {
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    useStore.getState().setFocal('I11');
+
+    // importGedcom and setFocal each call persist() too - let their debounce
+    // settle first so it cannot mask whether addPerson below arms one of its
+    // own. (This is the fake clock elapsing on its own, not flushSaves().)
+    await vi.advanceTimersByTimeAsync(SESSION_DEBOUNCE_MS);
+    expect((await session.getProject('tree'))!.ops).toEqual([]);
+
+    useStore.getState().addPerson({ nameRaws: ['Ghost /Doe/'], sex: 'male' });
+
+    // No flushSaves() call. Only addPerson's own persist(get) call, and the
+    // debounce elapsing on its own, can make this edit land.
+    await vi.advanceTimersByTimeAsync(SESSION_DEBOUNCE_MS);
+
+    const record = await session.getProject('tree');
+    expect(record).not.toBeNull();
+    expect(record!.ops).toHaveLength(1);
+    expect(record!.ops[0]).toMatchObject({ kind: 'addPerson' });
   });
 });

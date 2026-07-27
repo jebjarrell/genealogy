@@ -12,7 +12,12 @@ import type { ProjectFile } from '../fs/project.js';
 // only marks the folder unavailable, because the user's work is still safe.
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-export type FolderStatus = 'none' | 'connected' | 'needs-permission' | 'error' | 'name-conflict';
+export type FolderStatus =
+  | 'none'
+  | 'connected'
+  | 'needs-permission'
+  | 'error'
+  | 'name-conflict';
 
 export const SESSION_DEBOUNCE_MS = 300;
 export const FOLDER_DEBOUNCE_MS = 1000;
@@ -232,7 +237,11 @@ export class SaveScheduler {
         // Only a matching hash - or an unknown one ('', written before the
         // field existed) - is safe to write over.
         const onDisk = await workspace.projectSummary(snap.record.name);
-        if (onDisk && onDisk.sourceHash && onDisk.sourceHash !== snap.record.sourceHash) {
+        if (
+          onDisk &&
+          onDisk.sourceHash &&
+          onDisk.sourceHash !== snap.record.sourceHash
+        ) {
           // Stop the mirror rather than corrupt it, and never in silence. This
           // is a refusal, not a failure - the folder is fine and reconnecting
           // would change nothing, so it gets its own status distinct from

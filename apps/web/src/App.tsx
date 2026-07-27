@@ -69,7 +69,10 @@ function CollapsibleSection({
 
 function relativeTime(iso: string | null): string {
   if (!iso) return '';
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  const seconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(iso).getTime()) / 1000),
+  );
   if (seconds < 5) return 'just now';
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
@@ -210,7 +213,9 @@ export function App() {
         <div>
           <h1 className="text-base font-bold">Genealogy Knowledge Graph Viewer</h1>
           <div className="text-xs text-gray-500">
-            {projectName && <span className="font-medium text-gray-700">{projectName} · </span>}
+            {projectName && (
+              <span className="font-medium text-gray-700">{projectName} · </span>
+            )}
             {fileName}
             <SaveIndicator />
             {focalName && (
@@ -263,8 +268,8 @@ export function App() {
           <p className="max-w-md text-gray-600">
             Load a GEDCOM (<code>.ged</code>) file to explore your family tree as an
             interactive, ego-centric graph — with pedigree-collapse detection, manual
-            editing, a document vault, and an SAR proof checklist. Everything happens in your
-            browser; your files stay on your machine.
+            editing, a document vault, and an SAR proof checklist. Everything happens in
+            your browser; your files stay on your machine.
           </p>
           <div className="flex items-center gap-2">
             <UploadButton />

@@ -28,7 +28,9 @@ export function runSessionStoreContract(name: string, make: () => SessionStore):
       const bytes = new TextEncoder().encode('0 HEAD\n0 TRLR\n');
       await store.putSource('abc123', bytes);
       expect(await store.hasSource('abc123')).toBe(true);
-      expect(new TextDecoder().decode((await store.getSource('abc123'))!)).toContain('HEAD');
+      expect(new TextDecoder().decode((await store.getSource('abc123'))!)).toContain(
+        'HEAD',
+      );
       expect(await store.getSource('missing')).toBeNull();
     });
 
@@ -51,7 +53,10 @@ export function runSessionStoreContract(name: string, make: () => SessionStore):
     it('lists all projects', async () => {
       await store.putProject(makeRecord({ name: 'a', sourceHash: 'h1' }));
       await store.putProject(makeRecord({ name: 'b', sourceHash: 'h2' }));
-      expect((await store.listProjects()).map((r) => r.name).sort()).toEqual(['a', 'b']);
+      expect((await store.listProjects()).map((r) => r.name).sort()).toEqual([
+        'a',
+        'b',
+      ]);
     });
 
     it('round-trips the last-project pointer and clears it', async () => {
@@ -63,7 +68,9 @@ export function runSessionStoreContract(name: string, make: () => SessionStore):
     });
 
     it('renames a project, moving the record and the pointer', async () => {
-      await store.putProject(makeRecord({ name: 'old', sourceHash: 'h1', focalPersonId: 'I9' }));
+      await store.putProject(
+        makeRecord({ name: 'old', sourceHash: 'h1', focalPersonId: 'I9' }),
+      );
       await store.setLastProject('old');
 
       const renamed = await store.renameProject('old', 'new');

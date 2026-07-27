@@ -49,7 +49,9 @@ interface FileSystemDirectoryHandleLike {
     options?: { create?: boolean },
   ): Promise<FileSystemFileHandleLike>;
   removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
-  entries(): AsyncIterableIterator<[string, FileSystemFileHandleLike | FileSystemDirectoryHandleLike]>;
+  entries(): AsyncIterableIterator<
+    [string, FileSystemFileHandleLike | FileSystemDirectoryHandleLike]
+  >;
 }
 
 class RealFile implements FsFile {
@@ -145,7 +147,8 @@ export async function requestPermissionInteractive(handle: unknown): Promise<boo
   const opts = { mode: 'readwrite' as const };
   try {
     if (h.queryPermission && (await h.queryPermission(opts)) === 'granted') return true;
-    if (h.requestPermission && (await h.requestPermission(opts)) === 'granted') return true;
+    if (h.requestPermission && (await h.requestPermission(opts)) === 'granted')
+      return true;
   } catch {
     return false;
   }

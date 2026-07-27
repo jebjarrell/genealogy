@@ -26,7 +26,12 @@ describe('MemSessionStore isolation and availability', () => {
 
     const second = await store.getProject('tree');
     expect(second!.ops).toHaveLength(1);
-    expect(second!.ops[0]).toEqual({ kind: 'editPerson', personId: 'I1', notes: ['a'], at: 't1' });
+    expect(second!.ops[0]).toEqual({
+      kind: 'editPerson',
+      personId: 'I1',
+      notes: ['a'],
+      at: 't1',
+    });
   });
 
   it('does not let a mutated returned source array corrupt stored bytes', async () => {
@@ -46,17 +51,23 @@ describe('MemSessionStore isolation and availability', () => {
     store.isAvailable = false;
 
     expect(store.available()).toBe(false);
-    expect(await store.putProject(makeRecord({ name: 'tree', sourceHash: 'h1' }))).toBe(false);
+    expect(await store.putProject(makeRecord({ name: 'tree', sourceHash: 'h1' }))).toBe(
+      false,
+    );
     expect(await store.getProject('tree')).toBeNull();
     expect(await store.renameProject('tree', 'renamed')).toBeNull();
   });
 
   it('treats failWrites = true as write-path failure only, leaving reads intact', async () => {
     const store = new MemSessionStore();
-    await store.putProject(makeRecord({ name: 'tree', sourceHash: 'h1', focalPersonId: 'I1' }));
+    await store.putProject(
+      makeRecord({ name: 'tree', sourceHash: 'h1', focalPersonId: 'I1' }),
+    );
 
     store.failWrites = true;
-    expect(await store.putProject(makeRecord({ name: 'other', sourceHash: 'h2' }))).toBe(false);
+    expect(
+      await store.putProject(makeRecord({ name: 'other', sourceHash: 'h2' })),
+    ).toBe(false);
     expect(await store.renameProject('tree', 'renamed')).toBeNull();
 
     const stillThere = await store.getProject('tree');
