@@ -92,6 +92,36 @@ describe('importGedcom — auto-creates a project', () => {
     expect(record!.focalPersonId).toBe('I11');
   });
 
+  // Final review, item 6: loadModel set 'No individuals found in this file.'
+  // and returned early - and importGedcom then overwrote that notice with
+  // `Created project "notes"`, persisted the record, and pointed lastProject at
+  // it. Dropping a .txt or a corrupt GEDCOM produced a success message, a junk
+  // project, and a next boot that restored the junk instead of the real tree.
+  it('refuses to create a project from a file with no individuals', async () => {
+    await useStore.getState().importGedcom(bytes('nothing to see here'), 'notes.txt');
+    await useStore.getState().flushSaves();
+
+    const s = useStore.getState();
+    expect(s.notice).toBe('No individuals found in this file.');
+    expect(s.projectName).toBeNull();
+    expect(await session.listProjects()).toEqual([]);
+    expect(await session.getLastProject()).toBeNull();
+  });
+
+  it('leaves the real project restorable after a junk file is dropped on it', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+    expect(await session.getLastProject()).toBe('tree');
+
+    await useStore.getState().importGedcom(bytes('0 HEAD\n0 TRLR\n'), 'empty.ged');
+    await useStore.getState().flushSaves();
+
+    // The next boot still comes back to the user's tree, not to the junk.
+    expect(await session.getLastProject()).toBe('tree');
+    expect((await session.listProjects()).map((r) => r.name)).toEqual(['tree']);
+    expect(useStore.getState().notice).toBe('No individuals found in this file.');
+  });
+
   it('works with no session store at all (storage disabled)', async () => {
     useStore.getState().setSessionStore(null);
     await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');

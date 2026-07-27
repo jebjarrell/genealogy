@@ -840,6 +840,15 @@ export const useStore = create<AppState>((set, get) => {
       const now = new Date().toISOString();
 
       get().loadModel(parseGedcom(bytes), fileName, bytes);
+
+      // A file that parses to no individuals is not a tree: a .txt, a PDF
+      // renamed, a truncated GEDCOM. loadModel has already said so and cleared
+      // the project - so stop here rather than overwrite its notice with
+      // `Created project "..."`, persist a junk record, and repoint
+      // lastProject at it, which would make the next boot restore the junk
+      // instead of the user's real tree.
+      if (get().model?.persons.size === 0) return;
+
       set({
         projectName: name,
         sourceHash: hash,
