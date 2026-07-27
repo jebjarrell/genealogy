@@ -769,4 +769,99 @@ describe('SaveScheduler', () => {
     expect(conflicts).toEqual([]);
     expect((await session.getProject('tree'))!.name).toBe('tree');
   });
+
+  // ---- Residual review, N1: the latch could only be retired by touching a
+  // DIFFERENT project (clearStaleConflict), or by reloading the tab. Both
+  // tests below re-open the contested name itself, which is the one case that
+  // used to be impossible to recover from.
+
+  // Straight back, with no detour through another project - the ordinary way
+  // out of the banner, since the banner names the project and the Workspace
+  // modal lists it. openProjectByName has just re-read the winning tab's
+  // record and loaded it into the app, so this tab is now working from their
+  // data; refusing to save it is refusing to save work that is no longer
+  // stale. The tab used to stay blocked for the rest of its life.
+  it('resumes saving when the contested project is re-opened, with no detour through another project', async () => {
+    const conflicts: string[] = [];
+    const { scheduler, reported } = make({
+      onConflict: (name) => conflicts.push(name),
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched on 'tree'
+    expect(reported).toContain('error:conflict');
+
+    // Exactly what openProjectByName does: re-read the stored record (theirs),
+    // load it, and re-stake the claim from it.
+    const reloaded = (await session.getProject('tree'))!;
+    snapshot = { record: reloaded, sourceBytes: GED };
+    scheduler.noteOpened('tree', reloaded.updatedAt);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(reported[reported.length - 1]).toBe('saved');
+    expect(conflicts).toEqual(['tree']); // no second, spurious conflict
+    // Our write landed on top of their record - which is what we loaded.
+    expect((await session.getProject('tree'))!.updatedAt).not.toBe(
+      '2099-01-01T00:00:00.000Z',
+    );
+
+    // ...and clearing the latch has not disarmed detection: the next write by
+    // the other tab is still caught rather than overwritten.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-06-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB-AGAIN',
+    });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree', 'tree']);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB-AGAIN');
+  });
+
+  // The damaging half of N1: the latch outlived the record it was about. After
+  // the user deletes the contested project and imports a GEDCOM that takes the
+  // now-free name, the new project is a different tree that no other tab has
+  // ever seen - and it was never written to either backend, behind a banner
+  // claiming it was open in another tab that had saved since. Both false.
+  it('saves a brand-new project that takes the name of a deleted, contested one', async () => {
+    const { scheduler, reported, folders } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched on 'tree'
+    expect(reported).toContain('error:conflict');
+
+    // The user deletes it in both backends, as deleteProjectByName does...
+    await session.deleteProject('tree');
+    await workspace.deleteProject('tree');
+
+    // ...then imports a different file that is assigned the freed name.
+    snapshot = {
+      record: makeRecord({ name: 'tree', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('tree', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(reported[reported.length - 1]).toBe('saved');
+    expect((await session.getProject('tree'))!.sourceHash).toBe('h2');
+    expect(await session.getLastProject()).toBe('tree');
+    // The folder mirror, which the latch also stops, resumed too.
+    expect(folders[folders.length - 1]).toBe('connected');
+    expect((await workspace.openProject('tree'))!.project.sourceHash).toBe('h2');
+  });
 });

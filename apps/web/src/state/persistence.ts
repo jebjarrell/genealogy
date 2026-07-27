@@ -179,10 +179,10 @@ export class SaveScheduler {
    * record, not about this tab forever. Opening a different project means a
    * different record and a fresh claim, and a scheduler that stayed latched
    * would then sit there writing nothing, to no project, with the app looking
-   * perfectly healthy (final review, item 3). Switching back is safe: the
-   * claim is re-staked from the record actually loaded (see noteOpened), so
-   * this tab is working from the winner's data, and the next foreign write is
-   * detected again instead of being overwritten.
+   * perfectly healthy (final review, item 3).
+   *
+   * It is retired by noteOpened() - unconditionally, including for the
+   * contested project itself. See there for why that is safe.
    */
   private conflictedProject: string | null = null;
 
@@ -202,11 +202,37 @@ export class SaveScheduler {
    * first save writes over whatever another tab has done in the meantime. A
    * null `updatedAt` means there is no stored record to compare against (a
    * brand-new project, or one opened from the folder alone).
+   *
+   * This also retires any latched conflict - including one latched on this
+   * very project (residual review, N1). Delegating to clearStaleConflict()
+   * instead left the latch permanent for two cases it should never have
+   * survived:
+   *
+   *   - Re-opening the contested project from the Workspace modal. The record
+   *     has just been re-read and the app is now showing the winning tab's
+   *     data, which is precisely the state that makes clearing safe on the
+   *     away-and-back path - but the name matched, so nothing cleared and the
+   *     project stayed blocked forever.
+   *   - Deleting the contested project and importing a GEDCOM that takes the
+   *     freed name. The new project is a different tree that no other tab has
+   *     ever seen, and it was never written to either backend, behind a banner
+   *     saying it was open in another tab that had saved since.
+   *
+   * Clearing here cannot resurrect the clobber the latch exists to prevent,
+   * because every caller re-reads the authoritative record immediately before
+   * calling and loads it into the app, then stakes its claim from it:
+   *   - a non-null `updatedAt` arms the comparison against the record we just
+   *     read, so the next foreign write is caught again;
+   *   - a null one means there is no stored record at all (deleted, or
+   *     folder-only), so the first write creates one rather than overwriting
+   *     anybody's work.
+   * Either way the state this tab would go on to write is the winner's, not
+   * the stale state the latch was protecting against.
    */
   noteOpened(name: string, updatedAt: string | null): void {
     this.syncSession(this.opts.session());
     this.claim = updatedAt ? { name, updatedAt } : null;
-    this.clearStaleConflict(name);
+    this.conflictedProject = null;
   }
 
   /**
@@ -226,7 +252,11 @@ export class SaveScheduler {
     this.lastSession = session;
   }
 
-  /** A latch belongs to one project; working on another one retires it. */
+  /**
+   * A latch belongs to one project; working on another one retires it. Used by
+   * the run methods for the paths that change the open project without going
+   * through noteOpened() (a rename, or state replaced under the scheduler).
+   */
   private clearStaleConflict(name: string): void {
     if (this.conflictedProject && this.conflictedProject !== name) {
       this.conflictedProject = null;

@@ -856,7 +856,9 @@ export const useStore = create<AppState>((set, get) => {
         notice: `Created project "${name}".`,
       });
       // A brand-new record: nothing stored to compare against, and any
-      // conflict latched on the project we just left no longer applies.
+      // conflict latched before this import no longer applies - not even one
+      // latched on this same name, which happens when the contested project is
+      // deleted and a new file takes the freed name.
       scheduler?.noteOpened(name, null);
 
       if (session) void requestPersistentStorage();
@@ -1175,9 +1177,10 @@ export const useStore = create<AppState>((set, get) => {
         mapAncestorId: null,
       });
       // Base the next save on the record we just read (null when there is no
-      // stored record yet - a folder-only project). Also retires a conflict
-      // latched on a *different* project, so switching projects after another
-      // tab took one over resumes saving instead of going quietly dead.
+      // stored record yet - a folder-only project). Also retires any latched
+      // conflict, so both switching projects and re-opening the contested one
+      // resume saving instead of going quietly dead: we are now working from
+      // the record we just re-read, and the claim above is staked on it.
       scheduler?.noteOpened(name, record?.updatedAt ?? null);
 
       if (focalPersonId && model.persons.has(focalPersonId))
