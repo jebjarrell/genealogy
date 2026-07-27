@@ -67,7 +67,8 @@ export class Workspace {
    * Name + content hash for every project on disk. Used to match an imported
    * GEDCOM against existing folder projects without reading their sources.
    * Folders without a readable project.json are skipped rather than failing
-   * the whole listing.
+   * the whole listing. Falls back to the temp file if project.json is absent,
+   * recovering writes interrupted between the temp write and promotion.
    */
   async listProjectSummaries(): Promise<{ name: string; sourceHash: string }[]> {
     const out: { name: string; sourceHash: string }[] = [];
@@ -75,7 +76,11 @@ export class Workspace {
     if (!parent) return out;
     for (const name of await this.listProjects()) {
       const dir = await parent.getDir(name, false);
-      const file = dir ? await dir.getFile(PROJECT_JSON, false) : null;
+      let file = dir ? await dir.getFile(PROJECT_JSON, false) : null;
+      if (!file) {
+        const tmp = dir ? await dir.getFile(PROJECT_TMP, false) : null;
+        file = tmp;
+      }
       if (!file) continue;
       const project = parseProject(await file.readText());
       if (project) out.push({ name, sourceHash: project.sourceHash });

@@ -147,9 +147,20 @@ describe('Workspace — source hashing for import matching', () => {
   it('skips unreadable project folders when summarizing', async () => {
     const ws = new Workspace(new MemDir());
     await ws.createProject('Good', GED, 'g.ged', 'aaa');
-    // A folder with no project.json — e.g. one the user created by hand.
+    // A folder with no project.json - e.g. one the user created by hand.
     const projects = await ws.root.getDir('projects', true);
     await projects!.getDir('Empty', true);
     expect(await ws.listProjectSummaries()).toEqual([{ name: 'Good', sourceHash: 'aaa' }]);
+  });
+
+  it('skips malformed project.json when summarizing', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Good', GED, 'g.ged', 'bbb');
+    // A folder with broken project.json - parseProject returns null on bad JSON.
+    const projects = await ws.root.getDir('projects', true);
+    const badDir = await projects!.getDir('Bad', true);
+    const badFile = await badDir!.getFile('project.json', true);
+    await badFile!.write('{not valid json}');
+    expect(await ws.listProjectSummaries()).toEqual([{ name: 'Good', sourceHash: 'bbb' }]);
   });
 });

@@ -24,6 +24,7 @@ import { buildView, focalGenerations, pathsToHighlight } from './viewModel.js';
 import { Workspace } from '../fs/workspace.js';
 import { dirFromHandle, ensurePermission, pickDirectory } from '../fs/fsa.js';
 import { saveHandle, loadHandle, clearHandle } from '../fs/handleStore.js';
+import { sha256Hex } from '../fs/hash.js';
 import {
   DEFAULT_SETTINGS,
   type PedigreeOrientation,
@@ -139,7 +140,7 @@ function currentProjectFile(s: AppState): ProjectFile {
     name: s.projectName ?? 'Untitled',
     sourceFile: 'source.ged',
     sourceFileName: s.fileName ?? 'source.ged',
-    sourceHash: '',
+    sourceHash: s.sourceHash ?? '',
     focalPersonId: s.focalPersonId,
     ops: s.ops,
     checklists: s.checklists,
@@ -248,6 +249,7 @@ export interface AppState extends InternalState {
   workspaceName: string | null;
   projects: string[];
   projectName: string | null;
+  sourceHash: string | null;
   vaultDocs: VaultDoc[];
   checklists: SarChecklistState[];
   settings: ProjectSettings;
@@ -463,6 +465,7 @@ export const useStore = create<AppState>((set, get) => {
     workspaceName: null,
     projects: [],
     projectName: null,
+    sourceHash: null,
     vaultDocs: [],
     checklists: [],
     settings: { ...DEFAULT_SETTINGS },
@@ -496,6 +499,7 @@ export const useStore = create<AppState>((set, get) => {
         settings: aux.settings,
         // Loading a loose file leaves any bound workspace, but clears the project.
         projectName: null,
+        sourceHash: null,
       });
 
       if (model.persons.size === 0) {
@@ -822,14 +826,15 @@ export const useStore = create<AppState>((set, get) => {
         set({ notice: 'Connect a workspace and load a file first.' });
         return;
       }
-      await workspace.createProject(name, sourceBytes, fileName ?? 'source.ged');
+      const hash = await sha256Hex(sourceBytes);
+      await workspace.createProject(name, sourceBytes, fileName ?? 'source.ged', hash);
       const project: ProjectFile = {
         format: 'genealogy-graph/project',
         version: 1,
         name,
         sourceFile: 'source.ged',
         sourceFileName: fileName ?? 'source.ged',
-        sourceHash: '',
+        sourceHash: hash,
         focalPersonId,
         ops,
         checklists,
@@ -837,7 +842,7 @@ export const useStore = create<AppState>((set, get) => {
         updatedAt: new Date().toISOString(),
       };
       await workspace.saveProject(project);
-      set({ projectName: name, notice: `Saved as project "${name}".` });
+      set({ projectName: name, sourceHash: hash, notice: `Saved as project "${name}".` });
       await get().refreshProjects();
     },
 
@@ -874,6 +879,7 @@ export const useStore = create<AppState>((set, get) => {
         notice: `Opened project "${name}".`,
         mapAncestorId: null,
         projectName: name,
+        sourceHash: opened.project.sourceHash,
         checklists: opened.project.checklists,
         settings: opened.project.settings,
       });
