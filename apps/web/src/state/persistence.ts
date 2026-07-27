@@ -138,13 +138,23 @@ export class SaveScheduler {
   /** The session store the cache above was built against; see runSession(). */
   private lastSession: SessionStore | null = null;
   /**
-   * updatedAt we last wrote, per project name - this tab's claim on the
-   * record. Absent means either this tab has never saved that project this
-   * session, or the session store instance changed since (see runSession()),
-   * in both cases there is no claim to compare against, so no conflict check
-   * runs and a healthy single-tab session is never blocked spuriously.
+   * This tab's claim on the record it last wrote: the project name and the
+   * updatedAt we wrote for it. The scheduler only ever writes one project -
+   * the currently open one - so a single claim (not one per name) is enough,
+   * and it self-invalidates on rename or project switch: the next run's
+   * snapshot carries a different `record.name`, the claim's name no longer
+   * matches, and the check below is skipped rather than compared against
+   * unrelated data. That matters because `renameProject` is the only other
+   * writer of a project record: it moves the record to a new key while
+   * preserving `updatedAt`, so a claim keyed by the *old* name would compare
+   * cleanly-renamed data against a claim that was never updated for it - a
+   * false conflict on a single healthy tab (fix round 1, finding 1). Null
+   * means no claim at all: first save this session, or the session store
+   * instance changed since (see runSession()). Either way there is nothing
+   * to compare against, so a healthy single-tab session is never blocked
+   * spuriously.
    */
-  private readonly lastWritten = new Map<string, string>();
+  private claim: { name: string; updatedAt: string } | null = null;
   /**
    * Once true, stays true for the lifetime of this scheduler: a losing tab
    * must stop saving permanently, not just for one debounce cycle, or it
@@ -190,7 +200,7 @@ export class SaveScheduler {
     // conflict against a perfectly healthy single tab.
     if (session !== this.lastSession) {
       this.storedSources.clear();
-      this.lastWritten.clear();
+      this.claim = null;
       this.lastSession = session;
     }
 
@@ -198,13 +208,14 @@ export class SaveScheduler {
     try {
       // If the stored record has moved on from what we last wrote, another
       // tab has written it since - stop rather than overwrite work we cannot
-      // see. No claim (first save this session, or a project this tab has
-      // not yet written) means nothing to compare against, so a healthy
-      // single-tab session is never blocked here.
-      const claimed = this.lastWritten.get(snap.record.name);
-      if (claimed !== undefined) {
+      // see. A claim under a different name means this run is a rename or a
+      // project switch, not the project we staked the claim on - skip the
+      // check rather than compare it to unrelated data (see the `claim`
+      // field comment). No claim at all means nothing to compare against
+      // either way. Both cases leave a healthy single-tab session unblocked.
+      if (this.claim && this.claim.name === snap.record.name) {
         const current = await session.getProject(snap.record.name);
-        if (current && current.updatedAt !== claimed) {
+        if (current && current.updatedAt !== this.claim.updatedAt) {
           this.conflicted = true;
           this.opts.onSaveState('error', null);
           this.opts.onConflict?.(snap.record.name);
@@ -242,7 +253,7 @@ export class SaveScheduler {
         // This is now our claim on the record: the next run compares the
         // stored updatedAt against this value to notice if another tab wrote
         // over it in between.
-        this.lastWritten.set(snap.record.name, updatedAt);
+        this.claim = { name: snap.record.name, updatedAt };
         this.opts.onSaveState('saved', updatedAt);
       } else {
         this.opts.onSaveState('error', null);
@@ -255,7 +266,13 @@ export class SaveScheduler {
   private async runFolder(): Promise<void> {
     const snap = this.opts.snapshot();
     const workspace = this.opts.workspace();
-    if (!snap || !workspace) return;
+    // Once a session-store conflict has latched, the folder mirror must stop
+    // too - it is the same project, so it would otherwise keep overwriting
+    // the winning tab's project.json with this tab's stale state even though
+    // the session-store write already refused (fix round 1, finding 2). The
+    // `name-conflict` hash guard below does not catch this: same project,
+    // same sourceHash, so it never triggers.
+    if (!snap || !workspace || this.conflicted) return;
 
     try {
       const existing = await workspace.listProjects();

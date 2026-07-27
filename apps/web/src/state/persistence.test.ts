@@ -425,4 +425,124 @@ describe('SaveScheduler', () => {
     // The other tab's write survived; we did not clobber it.
     expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
   });
+
+  // Regression test (fix round 1, finding 3): the test above flushes twice,
+  // so the conflict fires exactly once and cannot distinguish a latching
+  // scheduler from one that would happily resume saving on the next cycle.
+  // "Once true, stays true" is the whole contract of the `conflicted` flag -
+  // a stopped tab must not silently start clobbering again. Pin it with a
+  // third schedule()/flush() cycle after the conflict has already fired.
+  it('keeps refusing to save on later cycles once a conflict has latched', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree']); // fired once
+
+    // A later edit in this (losing) tab schedules another save. The latch
+    // must still be in effect - no second onConflict call, and still no
+    // write over the other tab's record.
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree']); // still just the one call
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+
+  // Regression test (fix round 1, finding 2): runFolder()'s guard never
+  // checked the conflicted flag, so the losing tab kept mirroring its own
+  // (stale) state to the workspace folder after the session-store conflict
+  // latched - silently diverging project.json from the winning tab's copy,
+  // while the notice claims "no longer being saved here."
+  it('stops mirroring to the workspace folder once a conflict has latched', async () => {
+    const { scheduler, folders } = make();
+
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await workspace.listProjects()).toEqual(['tree']);
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    // This save is refused by the session-store conflict check, latching
+    // `conflicted`. Change the folder-visible field too, so a still-running
+    // folder mirror would be caught in the act.
+    snapshot = {
+      ...snapshot,
+      record: { ...snapshot.record, focalPersonId: 'LOSING-TAB' },
+    };
+    scheduler.schedule();
+    await scheduler.flush();
+
+    const folderWritesBefore = folders.filter((s) => s === 'connected').length;
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders.filter((s) => s === 'connected').length).toBe(folderWritesBefore);
+    const onDisk = await workspace.openProject('tree');
+    expect(onDisk!.project.focalPersonId).not.toBe('LOSING-TAB');
+  });
+
+  // Regression test (fix round 1, finding 1): SessionStore.renameProject()
+  // moves a record to a new key while preserving its updatedAt - the only
+  // writer of a project record besides the scheduler itself. A rename
+  // round-trip (tree -> other -> tree) by a single, perfectly healthy tab
+  // used to leave a stale claim under the original name that no longer
+  // matched what the rename had just written there, latching a false
+  // conflict and permanently disabling autosave for a user who never had a
+  // second tab open. renameCurrentProject() always flushes immediately
+  // before each rename (to settle any pending save under the old name), so
+  // this reproduces without any waiting.
+  it('does not fire a false conflict after a project is renamed away and back to its original name', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    // Save under the original name.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Rename tree -> other, mirroring renameCurrentProject(): flush first,
+    // then move the record.
+    await scheduler.flush();
+    snapshot = {
+      ...snapshot,
+      record: (await session.renameProject('tree', 'other'))!,
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // First save under the new name.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Rename back to the original name.
+    await scheduler.flush();
+    snapshot = {
+      ...snapshot,
+      record: (await session.renameProject('other', 'tree'))!,
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Save again under the original name - this is where a stale claim
+    // keyed by name used to collide with the record the rename just wrote.
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual([]);
+    expect((await session.getProject('tree'))!.name).toBe('tree');
+  });
 });
