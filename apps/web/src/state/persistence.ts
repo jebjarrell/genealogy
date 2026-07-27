@@ -32,6 +32,13 @@ export const FOLDER_DEBOUNCE_MS = 1000;
  */
 export class Debounced {
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Non-null exactly while a run (including any catch-up pass) is in flight.
+   * Doubles as the reentrancy guard and the promise joiners await - both
+   * assigned synchronously, before run() is ever invoked, and cleared
+   * synchronously, before that assignment's promise is allowed to settle.
+   * See fire() for why both edges have to be atomic with no gap.
+   */
   private runPromise: Promise<void> | null = null;
   private dirty = false;
 
@@ -57,24 +64,41 @@ export class Debounced {
     }
     if (this.runPromise) {
       // A run is already in flight. Fold this request into it rather than
-      // starting a second, overlapping run - but wait for that run (plus its
-      // catch-up pass) to actually finish before resolving.
+      // starting a second, overlapping run - and wait for that run (plus its
+      // catch-up pass) to actually finish before resolving, not just for the
+      // request to be queued.
       this.dirty = true;
       return this.runPromise;
     }
-    this.runPromise = this.runLoop();
-    try {
-      await this.runPromise;
-    } finally {
-      this.runPromise = null;
-    }
-  }
 
-  private async runLoop(): Promise<void> {
-    await this.run();
-    while (this.dirty) {
-      this.dirty = false;
+    // Claimed synchronously, before run() is invoked, so a reentrant fire()
+    // call arriving from inside run() itself (e.g. a host callback invoked
+    // synchronously that calls flush()) sees a run already in flight instead
+    // of racing to start a second one.
+    let settle!: () => void;
+    this.runPromise = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    try {
       await this.run();
+      while (this.dirty) {
+        this.dirty = false;
+        await this.run();
+      }
+    } finally {
+      // Cleared here - synchronously, in the same turn that resolves the
+      // promise - not in a later continuation of this method. If it were
+      // cleared after an `await this.runPromise` one level up instead, there
+      // would be a one-microtask window where runPromise is still non-null
+      // but already resolved: a fire() landing in that window would "join" a
+      // promise that will never run again, silently dropping its request
+      // (the dirty flag it sets would be stranded, since the while loop that
+      // checks it has already exited). Clearing before settle() closes that
+      // window: any fire() that observes runPromise has not yet had its
+      // settlement effects run, so it either truly joins an active run or
+      // correctly sees none and starts a fresh one.
+      this.runPromise = null;
+      settle();
     }
   }
 
@@ -102,8 +126,10 @@ export interface SaveSchedulerOptions {
 export class SaveScheduler {
   private readonly sessionSave: Debounced;
   private readonly folderSave: Debounced;
-  /** Hashes already written this session, so a large GEDCOM is stored once. */
+  /** Hashes already confirmed written this session, so a large GEDCOM is stored once. */
   private readonly storedSources = new Set<string>();
+  /** The session store the cache above was built against; see runSession(). */
+  private lastSession: SessionStore | null = null;
 
   constructor(private readonly opts: SaveSchedulerOptions) {
     this.sessionSave = new Debounced(SESSION_DEBOUNCE_MS, () => this.runSession());
@@ -131,11 +157,35 @@ export class SaveScheduler {
     const session = this.opts.session();
     if (!snap || !session) return;
 
+    // `session` is a getter, not a fixed reference - the host can hand back a
+    // different SessionStore instance (e.g. after a storage reconnect). The
+    // stored-sources cache is only valid against the store it was built
+    // against, so drop it when the instance changes rather than trusting
+    // hashes that may only exist in a store we are no longer writing to.
+    if (session !== this.lastSession) {
+      this.storedSources.clear();
+      this.lastSession = session;
+    }
+
     this.opts.onSaveState('saving', null);
     try {
       if (snap.sourceBytes && !this.storedSources.has(snap.record.sourceHash)) {
         if (!(await session.hasSource(snap.record.sourceHash))) {
           await session.putSource(snap.record.sourceHash, snap.sourceBytes);
+          // putSource() returns void and both implementations swallow a
+          // failed write rather than surfacing it: MemSessionStore no-ops
+          // under failWrites, and IdbSessionStore awaits idbPut() but
+          // discards the boolean it resolves to (idbPut itself swallows
+          // onerror/onabort and resolves false). Without this check, a
+          // quota-exceeded source write would still get cached as "stored",
+          // and a later putProject() could succeed and report "saved" for a
+          // record whose sourceHash points at a blob that was never written
+          // - unopenable on reload. Verify the write actually landed before
+          // trusting the cache.
+          if (!(await session.hasSource(snap.record.sourceHash))) {
+            this.opts.onSaveState('error', null);
+            return;
+          }
         }
         this.storedSources.add(snap.record.sourceHash);
       }

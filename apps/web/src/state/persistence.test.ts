@@ -4,6 +4,7 @@ import { MemSessionStore } from '../fs/memSessionStore.js';
 import { makeRecord } from '../fs/sessionStore.contract.js';
 import { Workspace } from '../fs/workspace.js';
 import { MemDir } from '../fs/memfs.js';
+import type { SessionProjectRecord, SessionStore } from '../fs/sessionStore.js';
 
 const GED = new TextEncoder().encode('0 HEAD\n0 @I1@ INDI\n0 TRLR\n');
 
@@ -34,7 +35,13 @@ describe('Debounced', () => {
     expect(run).toHaveBeenCalledTimes(1); // the timer did not also fire
   });
 
-  it('serializes overlapping runs and re-runs once for work queued mid-flight', async () => {
+  // Widened from the brief's original (a single reentrant fire()) per review:
+  // with only one reentrant call, an implementation that queued one catch-up
+  // run *per request* would also produce exactly 2 total run() calls here,
+  // so that version of the test could not distinguish "one catch-up run"
+  // from "one catch-up run per request." Issuing three reentrant calls before
+  // release() pins the stronger guarantee: still exactly 2 runs total.
+  it('serializes overlapping runs and re-runs exactly once for all work queued mid-flight', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const run = vi.fn(async () => {
@@ -43,11 +50,15 @@ describe('Debounced', () => {
     const d = new Debounced(300, run);
 
     const first = d.fire();
-    const second = d.fire(); // arrives while the first is still running
+    const second = d.fire(); // three requests arrive while the first is still running
+    const third = d.fire();
+    const fourth = d.fire();
     expect(run).toHaveBeenCalledTimes(1);
     release();
-    await Promise.all([first, second]);
-    expect(run).toHaveBeenCalledTimes(2); // exactly one catch-up run, not two
+    await Promise.all([first, second, third, fourth]);
+    // A "queue one catch-up per request" implementation would call run() 4
+    // times here; the guarantee is exactly one catch-up covering all of them.
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   // Regression test for a race in the brief's original sample: a fire() call
@@ -83,16 +94,70 @@ describe('Debounced', () => {
     expect(run).toHaveBeenCalledTimes(2);
     await first;
   });
+
+  // Regression test for a narrower, one-tick version of the same bug (review
+  // finding I-1), which survives even after the fix above: the first
+  // implementation of the fix cleared the "run in flight" marker in fire()'s
+  // own continuation, one microtask *after* the run it was tracking actually
+  // settled. A fire() landing in that exact gap saw a non-null marker,
+  // "joined" it, and got a promise that had already resolved without ever
+  // covering the joiner's request - a silent lost write, just harder to hit.
+  //
+  // This test does not rely on timing luck: it chains its own probe directly
+  // off the same promise the class is already internally awaiting, via
+  // `run.mock.results`, so the probe is guaranteed to run in the same
+  // microtask batch as - and immediately after - the class's own internal
+  // continuation for that promise. That is deterministically the gap in
+  // question, every run.
+  it('fire() arriving in the microtask gap right after settlement still gets its own run', async () => {
+    const resolvers: Array<() => void> = [];
+    const run = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const d = new Debounced(300, run);
+
+    const first = d.fire();
+    expect(run).toHaveBeenCalledTimes(1);
+    const p1 = run.mock.results[0]!.value as Promise<void>;
+
+    let second: Promise<void> | undefined;
+    // Registered on the exact promise the class's internal `await this.run()`
+    // is already waiting on. When p1 settles, handlers run in registration
+    // order: the class's own continuation first (same microtask batch), this
+    // probe second - landing precisely in the settle-to-clear gap.
+    const probeRan = p1.then(() => {
+      second = d.fire();
+    });
+
+    resolvers[0]!();
+    await probeRan;
+    expect(second).toBeDefined();
+
+    // If the joiner correctly triggered its own run (the fix), a second
+    // run() call is now genuinely in flight and needs its own resolution.
+    // If it instead silently adopted the already-settled promise from run #1
+    // (the bug), no second call ever happens and there is nothing to do here
+    // - `second` will still resolve on its own, just without covering the
+    // joiner's request, which is exactly what the assertion below catches.
+    if (resolvers.length > 1) resolvers[1]!();
+
+    await second;
+    await first;
+
+    // With the bug, the joiner's dirty flag is set but nothing ever rechecks
+    // it, so run() is called only once total.
+    expect(run).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('SaveScheduler', () => {
   let session: MemSessionStore;
   let workspace: Workspace;
   let snapshot: SaveSnapshot;
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  let schedulers: SaveScheduler[];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -102,6 +167,17 @@ describe('SaveScheduler', () => {
       record: makeRecord({ name: 'tree', sourceHash: 'h1' }),
       sourceBytes: GED,
     };
+    schedulers = [];
+  });
+
+  afterEach(() => {
+    // Fixtures above are shared `let` bindings captured by the option thunks
+    // passed to each SaveScheduler. A straggling debounce timer or catch-up
+    // run left over from one test could still fire during a later test and
+    // write into that test's fresh fixtures. Dispose every scheduler created
+    // in make() so nothing outlives its test.
+    for (const s of schedulers) s.dispose();
+    vi.useRealTimers();
   });
 
   const make = (over: Partial<ConstructorParameters<typeof SaveScheduler>[0]> = {}) => {
@@ -115,6 +191,7 @@ describe('SaveScheduler', () => {
       onFolderState: (status) => folders.push(status),
       ...over,
     });
+    schedulers.push(scheduler);
     return { scheduler, states, folders };
   };
 
@@ -204,5 +281,121 @@ describe('SaveScheduler', () => {
     await scheduler.flush();
     expect(await session.getProject('tree')).not.toBeNull();
     expect(folders).not.toContain('error');
+  });
+
+  // Regression test (review finding M-3): guarantee 2 - "a burst of edits
+  // collapses into one write of the latest state" - was never actually
+  // exercised. Every existing test calls schedule() once and never mutates
+  // the snapshot before the timer fires, so a scheduler that captured the
+  // snapshot at schedule() time (instead of at run time) would have passed
+  // all of them too. Mutate the snapshot after schedule() and confirm the
+  // value that lands is the latest one, not the one at schedule() time.
+  it('captures the snapshot at run time, so a late edit before the debounce fires still lands', async () => {
+    const { scheduler } = make();
+    scheduler.schedule();
+    snapshot = {
+      ...snapshot,
+      record: { ...snapshot.record, focalPersonId: 'I42' },
+    };
+    await vi.advanceTimersByTimeAsync(300);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('I42');
+  });
+
+  // Regression test (review finding I-2): a SessionStore whose putSource()
+  // silently fails to persist (both real implementations can do this -
+  // MemSessionStore under failWrites, and IdbSessionStore/idbPut swallowing
+  // onerror/onabort) must not be cached as "stored." If it were, a later
+  // putProject() that happens to succeed (a small record can fit where a
+  // large GEDCOM did not) would report "saved" for a project record whose
+  // sourceHash points at a blob that was never written - unopenable on
+  // reload. This store's putProject() always succeeds even though putSource()
+  // never actually stores anything, isolating the case from the store-wide
+  // failWrites flag used elsewhere.
+  class SourceDroppingStore implements SessionStore {
+    private projects = new Map<string, SessionProjectRecord>();
+    private last: string | null = null;
+    available(): boolean {
+      return true;
+    }
+    async putSource(): Promise<void> {
+      /* silently drops the write, like a quota-exceeded IndexedDB put */
+    }
+    async getSource(): Promise<Uint8Array | null> {
+      return null;
+    }
+    async hasSource(): Promise<boolean> {
+      return false; // never actually landed
+    }
+    async deleteSource(): Promise<void> {}
+    async putProject(record: SessionProjectRecord): Promise<boolean> {
+      this.projects.set(record.name, record);
+      return true;
+    }
+    async getProject(name: string): Promise<SessionProjectRecord | null> {
+      return this.projects.get(name) ?? null;
+    }
+    async listProjects(): Promise<SessionProjectRecord[]> {
+      return [...this.projects.values()];
+    }
+    async deleteProject(name: string): Promise<void> {
+      this.projects.delete(name);
+    }
+    async renameProject(): Promise<SessionProjectRecord | null> {
+      return null;
+    }
+    async getLastProject(): Promise<string | null> {
+      return this.last;
+    }
+    async setLastProject(name: string | null): Promise<void> {
+      this.last = name;
+    }
+  }
+
+  it('reports an error (and does not write the project record) when the source write silently fails to land', async () => {
+    const flaky = new SourceDroppingStore();
+    const states: string[] = [];
+    const scheduler = new SaveScheduler({
+      snapshot: () => snapshot,
+      session: () => flaky,
+      workspace: () => null,
+      onSaveState: (status) => states.push(status),
+      onFolderState: () => {},
+    });
+    schedulers.push(scheduler);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(states).toContain('error');
+    expect(states).not.toContain('saved');
+    // Must not report the project as saved while its source never landed.
+    expect(await flaky.getProject('tree')).toBeNull();
+  });
+
+  // Regression test (review finding I-2, staleness half): the stored-sources
+  // cache must not outlive the store it was verified against. If the host's
+  // `session()` getter starts returning a different store instance (e.g.
+  // after a storage reconnect), a hash cached from the old store must not be
+  // trusted for the new one.
+  it('clears the stored-sources cache when the session store instance changes', async () => {
+    let current: SessionStore = session;
+    const scheduler = new SaveScheduler({
+      snapshot: () => snapshot,
+      session: () => current,
+      workspace: () => workspace,
+      onSaveState: () => {},
+      onFolderState: () => {},
+    });
+    schedulers.push(scheduler);
+
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await current.hasSource('h1')).toBe(true);
+
+    const next = new MemSessionStore();
+    current = next;
+    const spy = vi.spyOn(next, 'putSource');
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(spy).toHaveBeenCalledTimes(1); // not skipped by a cache from the old store
   });
 });
