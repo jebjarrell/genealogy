@@ -8,6 +8,9 @@ import pedigreeGed from '../../../../packages/core/tests/fixtures/pedigree-colla
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 
+/** A GEDCOM that is definitely not the fixture, for name-collision tests. */
+const OTHER_GED = '0 HEAD\n1 SOUR OTHER\n0 @I1@ INDI\n1 NAME Someone /Else/\n0 TRLR\n';
+
 /** Import a project, then simulate a cold start with the same session store. */
 async function importThenReload(session: MemSessionStore, fileName = 'tree.ged') {
   useStore.getState().setSessionStore(session);
@@ -21,12 +24,14 @@ async function importThenReload(session: MemSessionStore, fileName = 'tree.ged')
   await useStore.getState().restoreSession();
 }
 
-// Every test that touches the store leaves the autosave debounce armed. Reset
-// first, then flush: the flush cancels both timers, and with no project open
-// the run it triggers is a no-op, so nothing leaks into the next test.
+// Every test that touches the store leaves the autosave debounce armed. Flush
+// FIRST so the armed save actually runs against the state that armed it, then
+// reset. Resetting first would make snapshotOf return null and turn the flush
+// into a no-op, which would hide from every test above exactly what the folder
+// mirror does one second after the test body ends.
 async function quiesce() {
-  useStore.setState(useStore.getInitialState(), true);
   await useStore.getState().flushSaves();
+  useStore.setState(useStore.getInitialState(), true);
 }
 
 describe('restoreSession', () => {
@@ -84,6 +89,14 @@ describe('restoreSession', () => {
     expect(useStore.getState().workspace).toBeNull();
     expect(useStore.getState().model).not.toBeNull();
   });
+
+  it('lists browser-only projects after a cold start with no folder', async () => {
+    // With no workspace, restoreWorkspace returns at its 'none' branch and
+    // backfillFolder never runs, so restoreSession itself has to do this.
+    await importThenReload(session);
+    expect(useStore.getState().workspace).toBeNull();
+    expect(useStore.getState().projects).toEqual(['tree']);
+  });
 });
 
 describe('backfillFolder', () => {
@@ -110,32 +123,73 @@ describe('backfillFolder', () => {
     expect(opened!.project.focalPersonId).toBe(useStore.getState().focalPersonId);
   });
 
-  it('does not overwrite a project already present in the folder', async () => {
-    const workspace = new Workspace(new MemDir());
-    await workspace.createProject('tree', bytes(pedigreeGed), 'tree.ged', 'existing-hash');
-    useStore.getState().setSessionStore(session);
-    useStore.setState({ workspace, folderStatus: 'connected' });
-    await useStore.getState().backfillFolder();
-
-    expect((await workspace.openProject('tree'))!.project.sourceHash).toBe('existing-hash');
-  });
-
   it('leaves a same-named folder project untouched when the browser also has one', async () => {
-    // The brief's version of the test above runs against an empty session
-    // store, so the "already present" guard is never actually reached. Put a
-    // real browser record in the way of a real folder record of the same name.
     useStore.getState().setSessionStore(session);
     await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
     await useStore.getState().flushSaves();
 
     const workspace = new Workspace(new MemDir());
-    await workspace.createProject('tree', bytes('0 HEAD\n0 TRLR\n'), 'other.ged', 'existing-hash');
+    await workspace.createProject('tree', bytes(OTHER_GED), 'other.ged', 'existing-hash');
     useStore.setState({ workspace, folderStatus: 'connected' });
     await useStore.getState().backfillFolder();
 
     const opened = await workspace.openProject('tree');
     expect(opened!.project.sourceHash).toBe('existing-hash');
-    expect(new TextDecoder().decode(opened!.gedcomBytes)).toBe('0 HEAD\n0 TRLR\n');
+    expect(new TextDecoder().decode(opened!.gedcomBytes)).toBe(OTHER_GED);
+  });
+
+  it('does not let the autosave overwrite the folder project it just skipped', async () => {
+    // backfillFolder skipping the name is not enough on its own: the folder
+    // debounce fires a second later and saveProject rewrites project.json
+    // without touching source.ged, which would leave the folder tree's GEDCOM
+    // beside this project's op-log and hash.
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+
+    const workspace = new Workspace(new MemDir());
+    await workspace.createProject('tree', bytes(OTHER_GED), 'other.ged', 'existing-hash');
+    useStore.setState({ workspace, folderStatus: 'connected' });
+    await useStore.getState().backfillFolder();
+
+    // Edit, then flush BEFORE any reset - this is the write that used to land.
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+
+    const opened = await workspace.openProject('tree');
+    expect(new TextDecoder().decode(opened!.gedcomBytes)).toBe(OTHER_GED);
+    expect(opened!.project.sourceHash).toBe('existing-hash');
+    expect(opened!.project.ops).toHaveLength(0);
+    // Refused, and said so.
+    expect(useStore.getState().folderStatus).toBe('error');
+    // The browser copy - the authoritative one - still has the work.
+    expect((await session.getProject('tree'))!.ops).toHaveLength(1);
+  });
+
+  it('still mirrors a folder project whose hash matches, and one with no hash', async () => {
+    // The guard must not become "never write to an existing folder project".
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+    const hash = useStore.getState().sourceHash!;
+
+    const workspace = new Workspace(new MemDir());
+    await workspace.createProject('tree', bytes(pedigreeGed), 'tree.ged', hash);
+    await workspace.createProject('legacy', bytes(pedigreeGed), 'legacy.ged'); // hash ''
+    useStore.setState({ workspace, folderStatus: 'connected' });
+
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+
+    expect((await workspace.openProject('tree'))!.project.ops).toHaveLength(1);
+    expect(useStore.getState().folderStatus).toBe('connected');
+
+    // And the same for a pre-hash folder project opened through the store.
+    await useStore.getState().openProjectByName('legacy');
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited Again /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+    expect((await workspace.openProject('legacy'))!.project.ops).toHaveLength(1);
+    expect(useStore.getState().folderStatus).toBe('connected');
   });
 });
 
@@ -276,5 +330,20 @@ describe('renameCurrentProject', () => {
     expect(await session.getProject('tree')).toBeNull();
     expect(await session.getProject('family')).not.toBeNull();
     expect(await session.getLastProject()).toBe('family');
+  });
+
+  it('reports a failure and keeps the old name when both backends refuse', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
+    await useStore.getState().flushSaves();
+
+    session.failWrites = true; // storage exists, writes rejected
+    await useStore.getState().renameCurrentProject('family');
+
+    expect(useStore.getState().projectName).toBe('tree');
+    expect(useStore.getState().notice).toContain('Could not rename');
+
+    // No duplicate left behind under the new name.
+    session.failWrites = false;
+    expect((await session.listProjects()).map((r) => r.name)).toEqual(['tree']);
   });
 });

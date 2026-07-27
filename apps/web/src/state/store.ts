@@ -849,6 +849,11 @@ export const useStore = create<AppState>((set, get) => {
           // pointer must not survive to the next boot.
           await session.setLastProject(null);
         }
+        // The project list has to be populated here, not by the folder half:
+        // with no folder ever connected, restoreWorkspace returns at its
+        // 'none' branch and backfillFolder is skipped, so nothing else would
+        // ever list the browser-only projects this union exists for.
+        await get().refreshProjects();
       }
 
       try {
@@ -1123,8 +1128,19 @@ export const useStore = create<AppState>((set, get) => {
       // the old record straight back, leaving a duplicate the rename just moved.
       await get().flushSaves();
       const { workspace, session } = get();
-      if (workspace) await workspace.renameProject(projectName, name);
-      if (session) await session.renameProject(projectName, name);
+      const wsOk = workspace
+        ? (await workspace.renameProject(projectName, name)) !== null
+        : false;
+      const sessionOk = session
+        ? (await session.renameProject(projectName, name)) !== null
+        : false;
+      // Both backends refused (or there were none). Bail rather than adopt the
+      // new name: persist() would then write a fresh record under it and leave
+      // the surviving original beside it as a duplicate.
+      if (!wsOk && !sessionOk) {
+        set({ notice: `Could not rename "${projectName}".` });
+        return;
+      }
       set({ projectName: name, notice: `Renamed to "${name}".` });
       persist(get);
       await get().refreshProjects();

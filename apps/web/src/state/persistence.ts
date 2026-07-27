@@ -222,6 +222,23 @@ export class SaveScheduler {
           snap.record.sourceFileName,
           snap.record.sourceHash,
         );
+      } else {
+        // A folder project that shares our name is not necessarily OUR project.
+        // saveProject rewrites project.json and never touches source.ged, so
+        // writing over a different tree leaves that tree's GEDCOM sitting
+        // beside our op-log and our hash: a project that replays foreign ops
+        // (applyOps is total - it skips what it cannot match, in silence) and
+        // mis-identifies itself the next time an import matches by content.
+        // Only a matching hash - or an unknown one ('', written before the
+        // field existed) - is safe to write over.
+        const onDisk = await workspace.projectSummary(snap.record.name);
+        if (onDisk && onDisk.sourceHash && onDisk.sourceHash !== snap.record.sourceHash) {
+          // Stop the mirror rather than corrupt it, and never in silence. The
+          // session copy still holds the user's work, which is exactly what the
+          // folder-error state means, so it needs no new status value.
+          this.opts.onFolderState('error');
+          return;
+        }
       }
       await workspace.saveProject(toProjectFile(snap.record));
       this.opts.onFolderState('connected');

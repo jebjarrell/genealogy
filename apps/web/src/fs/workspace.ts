@@ -64,26 +64,50 @@ export class Workspace {
   }
 
   /**
+   * Name + content hash for one project, read from its project.json alone so
+   * the (potentially huge) source.ged is never touched. Null when the folder or
+   * its project.json is absent or unreadable. Falls back to the temp file if
+   * project.json is absent, recovering writes interrupted between the temp
+   * write and promotion.
+   */
+  private async readSummary(
+    parent: FsDir,
+    name: string,
+  ): Promise<{ name: string; sourceHash: string } | null> {
+    const dir = await parent.getDir(name, false);
+    let file = dir ? await dir.getFile(PROJECT_JSON, false) : null;
+    if (!file) {
+      const tmp = dir ? await dir.getFile(PROJECT_TMP, false) : null;
+      file = tmp;
+    }
+    if (!file) return null;
+    const project = parseProject(await file.readText());
+    return project ? { name, sourceHash: project.sourceHash } : null;
+  }
+
+  /**
+   * Summary for a single named project. Lets a caller that already knows the
+   * name check what is on disk without paying for a full listing - the autosave
+   * mirror does this on every run.
+   */
+  async projectSummary(name: string): Promise<{ name: string; sourceHash: string } | null> {
+    const parent = await this.projectsDir(false);
+    return parent ? this.readSummary(parent, name) : null;
+  }
+
+  /**
    * Name + content hash for every project on disk. Used to match an imported
    * GEDCOM against existing folder projects without reading their sources.
    * Folders without a readable project.json are skipped rather than failing
-   * the whole listing. Falls back to the temp file if project.json is absent,
-   * recovering writes interrupted between the temp write and promotion.
+   * the whole listing.
    */
   async listProjectSummaries(): Promise<{ name: string; sourceHash: string }[]> {
     const out: { name: string; sourceHash: string }[] = [];
     const parent = await this.projectsDir(false);
     if (!parent) return out;
     for (const name of await this.listProjects()) {
-      const dir = await parent.getDir(name, false);
-      let file = dir ? await dir.getFile(PROJECT_JSON, false) : null;
-      if (!file) {
-        const tmp = dir ? await dir.getFile(PROJECT_TMP, false) : null;
-        file = tmp;
-      }
-      if (!file) continue;
-      const project = parseProject(await file.readText());
-      if (project) out.push({ name, sourceHash: project.sourceHash });
+      const summary = await this.readSummary(parent, name);
+      if (summary) out.push(summary);
     }
     return out;
   }
