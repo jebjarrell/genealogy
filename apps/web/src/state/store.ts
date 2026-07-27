@@ -41,6 +41,7 @@ import {
 import type { VaultDoc } from '../fs/vault.js';
 import {
   SaveScheduler,
+  toProjectFile,
   type FolderStatus,
   type SaveSnapshot,
   type SaveStatus,
@@ -210,6 +211,7 @@ export interface AppState extends InternalState {
   // ---- session lifecycle ----
   setSessionStore: (store: SessionStore | null) => void;
   importGedcom: (bytes: Uint8Array, fileName: string) => Promise<void>;
+  restoreSession: () => Promise<void>;
   flushSaves: () => Promise<void>;
 
   // ---- model loading ----
@@ -788,6 +790,77 @@ export const useStore = create<AppState>((set, get) => {
       await get().refreshProjects();
     },
 
+    /**
+     * Cold start. Two independent halves: the project restores from the session
+     * store with no permission and no user gesture, and the folder rebinds
+     * opportunistically. A restored project renders whether or not the folder
+     * comes back, so the folder half runs second and is wrapped - nothing it
+     * does (or fails to do) may undo or abort the restore above it.
+     */
+    restoreSession: async () => {
+      const { session } = get();
+      if (session) {
+        const lastName = await session.getLastProject();
+        const record = lastName ? await session.getProject(lastName) : null;
+        const source = record ? await session.getSource(record.sourceHash) : null;
+
+        if (record && source) {
+          const baseModel = parseGedcom(source);
+          const model = applyOps(baseModel, record.ops);
+          const graph = buildGraph(model);
+          set({
+            ...emptyInternal,
+            baseModel,
+            ops: record.ops,
+            redoStack: [],
+            model,
+            graph,
+            fileName: record.sourceFileName,
+            sourceBytes: source,
+            sourceHash: record.sourceHash,
+            projectName: record.name,
+            projectCreatedAt: record.createdAt,
+            checklists: record.checklists,
+            settings: record.settings,
+            warnings: model.warnings,
+            focalPersonId: null,
+            view: null,
+            collapsePoints: [],
+            detailPersonId: null,
+            selectedIds: [],
+            highlight: null,
+            focalPickerOpen: false,
+            mergeOpen: false,
+            notice: null,
+            mapAncestorId: null,
+            saveState: { status: 'saved', lastSavedAt: record.updatedAt },
+          });
+          const focal = record.focalPersonId;
+          if (focal && model.persons.has(focal)) get().setFocal(focal);
+          else if (model.persons.size > 0) set({ focalPickerOpen: true });
+        } else if (record) {
+          // Pointer survived but the bytes did not - clear it so the next boot
+          // starts clean instead of hitting this every time.
+          await session.setLastProject(null);
+          set({ notice: `Project "${record.name}" could not be restored — its source is missing.` });
+        } else if (lastName) {
+          // Pointer to a record that is no longer there at all. Nothing worth
+          // telling the user (the project is simply gone), but the dangling
+          // pointer must not survive to the next boot.
+          await session.setLastProject(null);
+        }
+      }
+
+      try {
+        await get().restoreWorkspace();
+        if (get().workspace) await get().backfillFolder();
+      } catch {
+        // The folder is opportunistic. A throw here (revoked handle, unplugged
+        // drive) is a folder status change, never a failed restore.
+        set({ folderStatus: 'error' });
+      }
+    },
+
     // ---- workspace / projects / vault ----
 
     connectWorkspace: async () => {
@@ -854,8 +927,36 @@ export const useStore = create<AppState>((set, get) => {
       await get().backfillFolder();
     },
 
-    /** Stub; replaced in Task 8 with the real folder backfill. */
-    backfillFolder: async () => {},
+    /**
+     * Mirror any project that exists only in the browser to the bound folder.
+     * Runs after a folder is connected or rebound: the session store is the
+     * authoritative copy, so the folder is brought up to it, never the reverse.
+     * A project already on disk is left completely alone - the folder copy may
+     * be the newer one, and this is a backfill, not a sync.
+     */
+    backfillFolder: async () => {
+      const { workspace, session } = get();
+      if (!workspace || !session) return;
+      try {
+        const onDisk = new Set(await workspace.listProjects());
+        for (const record of await session.listProjects()) {
+          if (onDisk.has(record.name)) continue;
+          const source = await session.getSource(record.sourceHash);
+          if (!source) continue;
+          await workspace.createProject(
+            record.name,
+            source,
+            record.sourceFileName,
+            record.sourceHash,
+          );
+          await workspace.saveProject(toProjectFile(record));
+        }
+        set({ folderStatus: 'connected' });
+        await get().refreshProjects();
+      } catch {
+        set({ folderStatus: 'error' });
+      }
+    },
 
     disconnectWorkspace: async () => {
       await clearHandle();
@@ -870,13 +971,23 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     refreshProjects: async () => {
-      const { workspace } = get();
-      if (!workspace) return;
+      const { workspace, session } = get();
+      const names = new Set<string>();
+      // Union of both backends: a project can exist only in the browser (no
+      // folder ever connected) or only on disk (written by another machine).
+      // Guarded separately on purpose - a broken folder must not hide the
+      // browser's own projects, which are the authoritative copy.
       try {
-        set({ projects: await workspace.listProjects() });
+        if (workspace) for (const n of await workspace.listProjects()) names.add(n);
       } catch {
-        /* ignore */
+        /* ignore - a partial list is better than none */
       }
+      try {
+        if (session) for (const r of await session.listProjects()) names.add(r.name);
+      } catch {
+        /* ignore - a partial list is better than none */
+      }
+      set({ projects: [...names].sort((a, b) => a.localeCompare(b)) });
     },
 
     refreshVault: async () => {
@@ -917,15 +1028,55 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     openProjectByName: async (name) => {
-      const { workspace } = get();
-      if (!workspace) return;
-      const opened = await workspace.openProject(name);
-      if (!opened) {
-        set({ notice: `Could not open project "${name}".` });
-        return;
+      await get().flushSaves(); // don't lose pending edits on the outgoing project
+      const { workspace, session } = get();
+
+      // Prefer the browser copy: it is authoritative and needs no permission,
+      // so a reopen works with no folder connected at all.
+      const record = session ? await session.getProject(name) : null;
+      const cached = record && session ? await session.getSource(record.sourceHash) : null;
+
+      let gedcomBytes: Uint8Array;
+      let ops: EditOp[];
+      let checklists: SarChecklistState[];
+      let settings: ProjectSettings;
+      let sourceHash: string;
+      let sourceFileName: string;
+      let createdAt: string;
+      let focalPersonId: string | null;
+
+      if (record && cached) {
+        gedcomBytes = cached;
+        ({ ops, checklists, settings, sourceHash, sourceFileName, focalPersonId } = record);
+        createdAt = record.createdAt;
+      } else {
+        // Every exit from here sets a notice: a reopen that cannot proceed must
+        // never look like nothing happened.
+        if (!workspace) {
+          set({ notice: `Could not open project "${name}".` });
+          return;
+        }
+        const opened = await workspace.openProject(name);
+        if (!opened) {
+          set({ notice: `Could not open project "${name}".` });
+          return;
+        }
+        gedcomBytes = opened.gedcomBytes;
+        ops = opened.project.ops;
+        checklists = opened.project.checklists;
+        settings = opened.project.settings;
+        sourceFileName = opened.project.sourceFileName;
+        focalPersonId = opened.project.focalPersonId;
+        // ProjectFile has no createdAt; its updatedAt is the best available
+        // lower bound and only ever seeds a record that has none yet.
+        createdAt = opened.project.updatedAt;
+        // A folder project written before sourceHash existed carries ''.
+        // snapshotOf refuses to autosave on a falsy hash, so without computing
+        // one here the project would never save and would report no error.
+        sourceHash = opened.project.sourceHash || (await sha256Hex(gedcomBytes));
       }
-      const baseModel = parseGedcom(opened.gedcomBytes);
-      const ops = opened.project.ops;
+
+      const baseModel = parseGedcom(gedcomBytes);
       const model = applyOps(baseModel, ops);
       const graph = buildGraph(model);
       set({
@@ -935,8 +1086,13 @@ export const useStore = create<AppState>((set, get) => {
         redoStack: [],
         model,
         graph,
-        fileName: opened.project.sourceFileName,
-        sourceBytes: opened.gedcomBytes,
+        fileName: sourceFileName,
+        sourceBytes: gedcomBytes,
+        sourceHash,
+        projectName: name,
+        projectCreatedAt: createdAt,
+        checklists,
+        settings,
         warnings: model.warnings,
         focalPersonId: null,
         view: null,
@@ -948,30 +1104,46 @@ export const useStore = create<AppState>((set, get) => {
         mergeOpen: false,
         notice: `Opened project "${name}".`,
         mapAncestorId: null,
-        projectName: name,
-        sourceHash: opened.project.sourceHash,
-        checklists: opened.project.checklists,
-        settings: opened.project.settings,
       });
-      const focal = opened.project.focalPersonId;
-      if (focal && model.persons.has(focal)) get().setFocal(focal);
+      if (focalPersonId && model.persons.has(focalPersonId)) get().setFocal(focalPersonId);
       else if (model.persons.size > 0) set({ focalPickerOpen: true });
+
+      // Cache a folder-only project into the session store so the next cold
+      // start restores it without the folder being present. Reached on both
+      // paths: harmless re-save for one that was already there.
+      persist(get);
       await get().refreshVault();
     },
 
     renameCurrentProject: async (name) => {
-      const { workspace, projectName } = get();
-      if (!workspace || !projectName) return;
-      const renamed = await workspace.renameProject(projectName, name);
-      if (renamed) set({ projectName: name, notice: `Renamed to "${name}".` });
+      const { projectName } = get();
+      if (!projectName) return;
+      // Settle any pending save under the OLD name and disarm both timers
+      // first. A debounce firing partway through the renames below would write
+      // the old record straight back, leaving a duplicate the rename just moved.
+      await get().flushSaves();
+      const { workspace, session } = get();
+      if (workspace) await workspace.renameProject(projectName, name);
+      if (session) await session.renameProject(projectName, name);
+      set({ projectName: name, notice: `Renamed to "${name}".` });
+      persist(get);
       await get().refreshProjects();
     },
 
     deleteProjectByName: async (name) => {
-      const { workspace, projectName } = get();
-      if (!workspace) return;
-      await workspace.deleteProject(name);
-      if (projectName === name) set({ projectName: null });
+      const { workspace, session, projectName } = get();
+      // Clear the open project BEFORE touching either backend: this makes
+      // snapshotOf return null, so a save still sitting behind its debounce
+      // cannot fire during the awaits below and resurrect the record.
+      if (projectName === name) {
+        set({ projectName: null, sourceHash: null, projectCreatedAt: null });
+      }
+      if (workspace) await workspace.deleteProject(name);
+      if (session) {
+        await session.deleteProject(name);
+        // Never leave the next boot pointing at a record that is gone.
+        if (projectName === name) await session.setLastProject(null);
+      }
       await get().refreshProjects();
     },
 

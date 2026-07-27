@@ -40,6 +40,13 @@ describe('importGedcom — auto-creates a project', () => {
     useStore.getState().setFocal('I11');
     await useStore.getState().flushSaves();
 
+    // Wipe the store between the two imports, keeping only the session store.
+    // Without this the assertions below pass on state that merely carried over
+    // in-process; the point is that the reopen genuinely reads the project
+    // back out of the browser copy.
+    useStore.setState(useStore.getInitialState(), true);
+    useStore.getState().setSessionStore(session);
+
     await useStore.getState().importGedcom(bytes(pedigreeGed), 'tree.ged');
     await useStore.getState().flushSaves();
 
