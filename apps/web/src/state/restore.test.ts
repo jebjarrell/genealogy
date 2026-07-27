@@ -539,6 +539,146 @@ describe('cross-tab conflict', () => {
   });
 });
 
+// Residual review, N2: the three store-side scheduler.noteOpened() call sites
+// were entirely untested. persistence.test.ts calls noteOpened() directly, so
+// the mechanism was pinned but the wiring was not - each of the three calls
+// could be deleted with the whole suite still green, and each deletion silently
+// re-opens the cross-tab clobber the mechanism exists to prevent.
+//
+// Every test here is written so that the ONLY thing that can make it pass is
+// the store's own noteOpened() call: none of them stakes a claim by saving
+// between the open and the other tab's write, so with the call removed the
+// scheduler reaches its first save with no claim (or a claim under another
+// name), skips the comparison entirely, and overwrites the other tab.
+//
+// Fake timers throughout: openProjectByName and importGedcom both end with a
+// persist() that arms the 300ms debounce, and a real clock could let that save
+// land - and stake a claim - before the "other tab" writes, which would mask
+// exactly the regression these tests exist to catch.
+describe('noteOpened wiring', () => {
+  let session: MemSessionStore;
+
+  beforeEach(() => {
+    useStore.setState(useStore.getInitialState(), true);
+    session = new MemSessionStore();
+    useStore.getState().setSessionStore(session);
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    await quiesce();
+    vi.useRealTimers();
+  });
+
+  // The cold-start case, and the most important instance of it: two tabs both
+  // restoring the same lastProject on load. Neither has written anything yet,
+  // so nothing but the restored record itself can tell this tab what its edits
+  // are based on.
+  it('restoreSession bases the first save on the restored record, so a cold-started tab cannot clobber another', async () => {
+    // Tab 1 creates the project.
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'coldstart.ged');
+    await useStore.getState().flushSaves();
+    const record = (await session.getProject('coldstart'))!;
+    const source = (await session.getSource(record.sourceHash))!;
+
+    // Tab 2 cold-starts against the same stored state. A separate store
+    // instance is what a second tab really has, and it also clears the
+    // scheduler's claim (syncSession), so this tab starts with no claim at
+    // all - exactly like a freshly loaded page.
+    const other = new MemSessionStore();
+    await other.putSource(record.sourceHash, source);
+    await other.putProject(record);
+    await other.setLastProject('coldstart');
+
+    useStore.setState(useStore.getInitialState(), true);
+    useStore.getState().setSessionStore(other);
+    await useStore.getState().restoreSession();
+    expect(useStore.getState().projectName).toBe('coldstart');
+
+    // Tab 1 saves while tab 2 sits on the record it restored.
+    await other.putProject({
+      ...record,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+
+    expect(useStore.getState().saveState.blockedReason).toBe('conflict');
+    expect((await other.getProject('coldstart'))!.focalPersonId).toBe('OTHER-TAB');
+    expect((await other.getProject('coldstart'))!.ops).toHaveLength(0);
+  });
+
+  // Re-opening a project this tab has not touched since another tab took it
+  // over. The claim in force belongs to whatever was open before, under a
+  // different name, so the comparison is skipped unless the open re-stakes it.
+  it('openProjectByName re-stakes the claim on the record it read, so a reopened project cannot clobber another tab', async () => {
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'reopened.ged');
+    await useStore.getState().flushSaves();
+    await useStore.getState().importGedcom(bytes(OTHER_GED), 'sidebar.ged');
+    await useStore.getState().flushSaves();
+    expect(useStore.getState().projectName).toBe('sidebar');
+
+    await useStore.getState().openProjectByName('reopened');
+    expect(useStore.getState().projectName).toBe('reopened');
+
+    // The other tab writes after our read.
+    await session.putProject({
+      ...(await session.getProject('reopened'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+
+    expect(useStore.getState().saveState.blockedReason).toBe('conflict');
+    expect((await session.getProject('reopened'))!.focalPersonId).toBe('OTHER-TAB');
+    expect((await session.getProject('reopened'))!.ops).toHaveLength(0);
+  });
+
+  // importGedcom's call carries the other half of noteOpened's job: retiring a
+  // latched conflict. Deleting the contested project and importing a file that
+  // takes the freed name is the case where the latch is on the same name the
+  // new project gets - so without this call the brand-new tree, which no other
+  // tab has ever seen, is never written to either backend (residual review,
+  // N1) and the banner blames a tab that is not there.
+  it('importGedcom clears a latched conflict, so a new project on the freed name still saves', async () => {
+    const workspace = new Workspace(new MemDir());
+    useStore.setState({ workspace, folderStatus: 'connected' });
+
+    await useStore.getState().importGedcom(bytes(pedigreeGed), 'reclaimed.ged');
+    await useStore.getState().flushSaves();
+
+    // Another tab takes it over.
+    await session.putProject({
+      ...(await session.getProject('reclaimed'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+    useStore.getState().editPerson('I11', { nameRaws: ['Edited /Name/'], sex: 'male' });
+    await useStore.getState().flushSaves();
+    expect(useStore.getState().saveState.blockedReason).toBe('conflict');
+
+    // The user deletes it and imports a different tree, which is assigned the
+    // name that just came free.
+    await useStore.getState().deleteProjectByName('reclaimed');
+    await useStore.getState().importGedcom(bytes(OTHER_GED), 'reclaimed.ged');
+    await useStore.getState().flushSaves();
+
+    expect(useStore.getState().projectName).toBe('reclaimed');
+    expect(useStore.getState().saveState.status).toBe('saved');
+    expect(useStore.getState().saveState.blockedReason).toBeUndefined();
+    const hash = useStore.getState().sourceHash!;
+    expect((await session.getProject('reclaimed'))!.sourceHash).toBe(hash);
+    expect(await session.getLastProject()).toBe('reclaimed');
+    // ...and in the folder too, which the latch also stops.
+    expect(useStore.getState().folderStatus).toBe('connected');
+    expect((await workspace.openProject('reclaimed'))!.project.sourceHash).toBe(hash);
+  });
+});
+
 // Task 10 fix round 1, finding 2: every persistence test above proves data
 // round-trips through a SessionStore, but every one of them gets there via an
 // explicit `await flushSaves()` - and SaveScheduler.flush() calls fire()
