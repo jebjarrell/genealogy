@@ -27,6 +27,12 @@ describe('sanitizeProjectName', () => {
     expect(sanitizeProjectName('x'.repeat(250))).toHaveLength(100);
   });
 
+  it('does not leave a trailing dot when truncation lands on one', () => {
+    const result = sanitizeProjectName('x'.repeat(99) + '.' + 'y'.repeat(50));
+    expect(result).toHaveLength(99);
+    expect(result.endsWith('.')).toBe(false);
+  });
+
   it('falls back to Untitled when nothing usable remains', () => {
     expect(sanitizeProjectName('')).toBe('Untitled');
     expect(sanitizeProjectName('///')).toBe('Untitled');
