@@ -10,6 +10,30 @@ const load = (ged: string, name = 'test.ged') =>
   useStore.getState().loadModel(parseGedcom(ged), name);
 const ids = () => useStore.getState().view!.nodes.map((n) => n.person.id);
 
+// A minimal file that declares its root person via the GEDCOM header's _ROOT
+// extension tag, exercising the branch of loadModel that pedigree-collapse.ged
+// (no declared root) deliberately does not.
+const declaredRootGed = `0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+1 _ROOT @I2@
+0 @I1@ INDI
+1 NAME Parent /Root/
+1 SEX M
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Child /Root/
+1 SEX F
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I2@
+0 TRLR
+`;
+
 describe('app store — focal-on-load (TRD §13)', () => {
   beforeEach(() => {
     useStore.setState(useStore.getInitialState(), true);
@@ -28,20 +52,28 @@ describe('app store — focal-on-load (TRD §13)', () => {
     expect(s.view).toBeNull();
   });
 
-  it('honours a remembered choice for the same file', () => {
-    localStorage.setItem('genealogy:focal:test.ged', 'I2');
-    load(pedigreeGed);
+  // localStorage's per-file `genealogy:focal:` key is gone (Task 10). Focal
+  // recall across a reload is now the session store's job and is covered by
+  // restore.test.ts ("reopens the last project with its model, ops, and focal
+  // person"). What's left worth proving here, with loadModel's in-memory-only
+  // path, is the other input to focal selection: a root person declared right
+  // in the GEDCOM header, which nothing else in this suite exercises.
+  it('honours the focal person declared in the GEDCOM header', () => {
+    load(declaredRootGed, 'declared.ged');
     const s = useStore.getState();
     expect(s.focalPersonId).toBe('I2');
     expect(s.focalPickerOpen).toBe(false);
   });
 
-  it('setFocal builds the ego network and remembers the choice', () => {
+  it('setFocal builds the ego network centred on the chosen person', () => {
     load(pedigreeGed);
     useStore.getState().setFocal('I11');
-    expect(useStore.getState().focalPersonId).toBe('I11');
-    expect(ids()).toContain('I11');
-    expect(localStorage.getItem('genealogy:focal:test.ged')).toBe('I11');
+    const s = useStore.getState();
+    expect(s.focalPersonId).toBe('I11');
+    // Not just the focal node itself: both of Paul's ancestor lines should be
+    // pulled into view (see pedigree-collapse.ged's header note).
+    expect(ids()).toEqual(expect.arrayContaining(['I11', 'I7', 'I3', 'I1']));
+    expect(s.view!.nodes.find((n) => n.person.id === 'I11')!.isFocal).toBe(true);
   });
 });
 

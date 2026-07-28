@@ -22,16 +22,35 @@ import {
 } from '@genealogy/core';
 import { buildView, focalGenerations, pathsToHighlight } from './viewModel.js';
 import { Workspace } from '../fs/workspace.js';
-import { dirFromHandle, ensurePermission, pickDirectory } from '../fs/fsa.js';
+import {
+  dirFromHandle,
+  hasPermission,
+  requestPermissionInteractive,
+  pickDirectory,
+} from '../fs/fsa.js';
 import { saveHandle, loadHandle, clearHandle } from '../fs/handleStore.js';
+import { sha256Hex } from '../fs/hash.js';
+import { sanitizeProjectName, uniqueProjectName } from '../fs/projectName.js';
+import {
+  IdbSessionStore,
+  requestPersistentStorage,
+  type SessionStore,
+} from '../fs/sessionStore.js';
 import {
   DEFAULT_SETTINGS,
   type PedigreeOrientation,
-  type ProjectFile,
   type ProjectSettings,
   type SarChecklistState,
 } from '../fs/project.js';
 import type { VaultDoc } from '../fs/vault.js';
+import {
+  SaveScheduler,
+  toProjectFile,
+  type FolderStatus,
+  type SaveBlockedReason,
+  type SaveSnapshot,
+  type SaveStatus,
+} from './persistence.js';
 
 export const NODE_BUDGET = 300;
 
@@ -62,107 +81,42 @@ export interface Highlight {
   edgeKeys: Set<string>;
 }
 
-// ---- localStorage fallback (quick mode, no bound workspace) -------------
-// When no workspace folder is bound the app still works: the op-log, focal
-// choice, checklists and settings persist to localStorage keyed by file. The
-// pristine parsed model is never written; ops are replayed over it on load.
+// ---- Autosave ------------------------------------------------------------
+// One scheduler for the app's lifetime. It pulls a snapshot from the store on
+// each run rather than capturing state at schedule time, so a burst of edits
+// coalesces into a single write of the latest state.
 
-const rememberKey = (f: string) => `genealogy:focal:${f}`;
-const opsKey = (f: string) => `genealogy:ops:${f}`;
-const auxKey = (f: string) => `genealogy:aux:${f}`;
+let scheduler: SaveScheduler | null = null;
 
-function lsGet(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-function lsSet(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignore */
-  }
-}
-
-function rememberFocal(fileName: string | null, id: string): void {
-  if (fileName) lsSet(rememberKey(fileName), id);
-}
-function recallFocal(fileName: string): string | undefined {
-  return lsGet(rememberKey(fileName)) ?? undefined;
-}
-function loadOpsLS(fileName: string | null): EditOp[] {
-  if (!fileName) return [];
-  try {
-    const parsed: unknown = JSON.parse(lsGet(opsKey(fileName)) ?? '[]');
-    return Array.isArray(parsed) ? (parsed as EditOp[]) : [];
-  } catch {
-    return [];
-  }
-}
-function saveOpsLS(fileName: string | null, ops: EditOp[]): void {
-  if (fileName) lsSet(opsKey(fileName), JSON.stringify(ops));
-}
-interface AuxState {
-  checklists: SarChecklistState[];
-  settings: ProjectSettings;
-}
-function loadAuxLS(fileName: string | null): AuxState {
-  const fallback: AuxState = { checklists: [], settings: { ...DEFAULT_SETTINGS } };
-  if (!fileName) return fallback;
-  try {
-    const raw = JSON.parse(lsGet(auxKey(fileName)) ?? '{}') as Partial<AuxState>;
-    return {
-      checklists: Array.isArray(raw.checklists) ? raw.checklists : [],
-      settings: {
-        orientation:
-          raw.settings?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
-      },
-    };
-  } catch {
-    return fallback;
-  }
-}
-function saveAuxLS(fileName: string | null, aux: AuxState): void {
-  if (fileName) lsSet(auxKey(fileName), JSON.stringify(aux));
-}
-
-// ---- Project-mode autosave (debounced) ---------------------------------
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-function currentProjectFile(s: AppState): ProjectFile {
+function snapshotOf(s: AppState): SaveSnapshot | null {
+  // A falsy sourceHash ('' or null) is not a real content hash - it is the
+  // "unknown" placeholder ProjectFile documents for pre-existing records. That
+  // placeholder must never be treated as a key into the content-addressed
+  // source store: two different projects with an unknown hash would collide
+  // on the same '' key, and the second putSource() would be skipped as
+  // "already stored", leaving its record pointing at the first project's
+  // GEDCOM bytes. Refusing to save is strictly better than saving under a
+  // colliding key.
+  if (!s.projectName || !s.baseModel || !s.sourceHash) return null;
   return {
-    format: 'genealogy-graph/project',
-    version: 1,
-    name: s.projectName ?? 'Untitled',
-    sourceFile: 'source.ged',
-    sourceFileName: s.fileName ?? 'source.ged',
-    focalPersonId: s.focalPersonId,
-    ops: s.ops,
-    checklists: s.checklists,
-    settings: s.settings,
-    updatedAt: new Date().toISOString(),
+    record: {
+      name: s.projectName,
+      sourceHash: s.sourceHash,
+      sourceFileName: s.fileName ?? 'source.ged',
+      focalPersonId: s.focalPersonId,
+      ops: s.ops,
+      checklists: s.checklists,
+      settings: s.settings,
+      createdAt: s.projectCreatedAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    sourceBytes: s.sourceBytes,
   };
 }
 
-/** Persist current state to the active backend (project folder or localStorage). */
-function persist(get: () => AppState): void {
-  const s = get();
-  if (s.workspace && s.projectName) {
-    if (saveTimer) clearTimeout(saveTimer);
-    const ws = s.workspace;
-    const project = currentProjectFile(s);
-    saveTimer = setTimeout(() => {
-      void ws.saveProject(project).catch(() => {
-        /* surfaced via save-state if needed */
-      });
-    }, 400);
-  } else if (s.fileName) {
-    saveOpsLS(s.fileName, s.ops);
-    saveAuxLS(s.fileName, { checklists: s.checklists, settings: s.settings });
-  }
+/** Queue a save of the current state to every available backend. */
+function persist(_get: () => AppState): void {
+  scheduler?.schedule();
 }
 
 // ---- Survivor mapping (ids that may have been merged away) --------------
@@ -247,12 +201,41 @@ export interface AppState extends InternalState {
   workspaceName: string | null;
   projects: string[];
   projectName: string | null;
+  /** Content hash of the open project's GEDCOM. */
+  sourceHash: string | null;
+  projectCreatedAt: string | null;
+  folderStatus: FolderStatus;
+  reconnectWorkspace: () => Promise<void>;
+  backfillFolder: () => Promise<void>;
+  session: SessionStore | null;
+  /**
+   * `blockedReason` is the durable half of a failed save. The status alone
+   * cannot distinguish "storage is broken" from "another tab owns this
+   * record", and the notice that used to carry that distinction is overwritten
+   * by the very next edit - so the true explanation was transient while the
+   * false one ("storage unavailable") was the one that stuck.
+   */
+  saveState: {
+    status: SaveStatus;
+    lastSavedAt: string | null;
+    blockedReason?: SaveBlockedReason;
+  };
   vaultDocs: VaultDoc[];
   checklists: SarChecklistState[];
   settings: ProjectSettings;
 
+  // ---- session lifecycle ----
+  setSessionStore: (store: SessionStore | null) => void;
+  importGedcom: (bytes: Uint8Array, fileName: string) => Promise<void>;
+  restoreSession: () => Promise<void>;
+  flushSaves: () => Promise<void>;
+
   // ---- model loading ----
-  loadModel: (model: GenealogyModel, fileName: string, sourceBytes?: Uint8Array) => void;
+  loadModel: (
+    model: GenealogyModel,
+    fileName: string,
+    sourceBytes?: Uint8Array,
+  ) => void;
   setFocal: (personId: string) => void;
   selectPerson: (personId: string) => void;
   deselectPerson: (personId: string) => void;
@@ -282,13 +265,32 @@ export interface AppState extends InternalState {
   addEvent: (input: EventInput) => string | null;
   editEvent: (
     eventId: string,
-    patch: { eventType?: EventType; dateRaw?: string | null; placeRaw?: string | null; description?: string | null },
+    patch: {
+      eventType?: EventType;
+      dateRaw?: string | null;
+      placeRaw?: string | null;
+      description?: string | null;
+    },
   ) => void;
   linkRelationship: (
     relation: 'parent-child' | 'spouse',
-    ids: { parentId?: string; childId?: string; spouseAId?: string; spouseBId?: string },
+    ids: {
+      parentId?: string;
+      childId?: string;
+      spouseAId?: string;
+      spouseBId?: string;
+    },
   ) => void;
-  unlinkRelationship: (familyId: string, relation: 'parent-child' | 'spouse', ids: { parentId?: string; childId?: string; spouseAId?: string; spouseBId?: string }) => void;
+  unlinkRelationship: (
+    familyId: string,
+    relation: 'parent-child' | 'spouse',
+    ids: {
+      parentId?: string;
+      childId?: string;
+      spouseAId?: string;
+      spouseBId?: string;
+    },
+  ) => void;
 
   // ---- pedigree orientation ----
   setOrientation: (orientation: PedigreeOrientation) => void;
@@ -299,9 +301,9 @@ export interface AppState extends InternalState {
   disconnectWorkspace: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   refreshVault: () => Promise<void>;
-  saveAsProject: (name: string) => Promise<void>;
   openProjectByName: (name: string) => Promise<void>;
-  renameCurrentProject: (name: string) => Promise<void>;
+  /** Rename the open project. The name is sanitized; collisions are refused. */
+  renameCurrentProject: (requestedName: string) => Promise<void>;
   deleteProjectByName: (name: string) => Promise<void>;
   addVaultDocument: (file: File) => Promise<{ deduped: boolean; name: string } | null>;
 
@@ -377,8 +379,14 @@ export const useStore = create<AppState>((set, get) => {
     redoStack: EditOp[],
     opts?: { addedIds?: string[]; focusId?: string; notice?: string | null },
   ): void => {
-    const { baseModel, focalPersonId, viewOptions, viewIds, detailPersonId, mapAncestorId } =
-      get();
+    const {
+      baseModel,
+      focalPersonId,
+      viewOptions,
+      viewIds,
+      detailPersonId,
+      mapAncestorId,
+    } = get();
     if (!baseModel) return;
     const model = applyOps(baseModel, nextOps);
     const graph = buildGraph(model);
@@ -403,7 +411,8 @@ export const useStore = create<AppState>((set, get) => {
           if (s) nextViewIds.add(s);
         }
         nextViewIds.add(focal);
-        for (const id of opts?.addedIds ?? []) if (model.persons.has(id)) nextViewIds.add(id);
+        for (const id of opts?.addedIds ?? [])
+          if (model.persons.has(id)) nextViewIds.add(id);
       }
       derived = {
         collapsePoints,
@@ -462,19 +471,22 @@ export const useStore = create<AppState>((set, get) => {
     workspaceName: null,
     projects: [],
     projectName: null,
+    sourceHash: null,
+    projectCreatedAt: null,
+    folderStatus: 'none',
+    session: typeof indexedDB !== 'undefined' ? new IdbSessionStore() : null,
+    saveState: { status: 'idle', lastSavedAt: null },
     vaultDocs: [],
     checklists: [],
     settings: { ...DEFAULT_SETTINGS },
 
     loadModel: (baseModel, fileName, sourceBytes) => {
-      const ops = loadOpsLS(fileName);
-      const aux = loadAuxLS(fileName);
-      const model = applyOps(baseModel, ops);
+      const model = applyOps(baseModel, []);
       const graph = buildGraph(model);
       set({
         ...emptyInternal,
         baseModel,
-        ops,
+        ops: [],
         redoStack: [],
         model,
         graph,
@@ -491,33 +503,25 @@ export const useStore = create<AppState>((set, get) => {
         mergeOpen: false,
         notice: null,
         mapAncestorId: null,
-        checklists: aux.checklists,
-        settings: aux.settings,
+        checklists: [],
+        settings: { ...DEFAULT_SETTINGS },
         // Loading a loose file leaves any bound workspace, but clears the project.
         projectName: null,
+        sourceHash: null,
       });
 
       if (model.persons.size === 0) {
         set({ notice: 'No individuals found in this file.' });
         return;
       }
-
-      const remembered = recallFocal(fileName);
       const declared = model.header?.rootPersonId;
-      const chosen =
-        remembered && model.persons.has(remembered)
-          ? remembered
-          : declared && model.persons.has(declared)
-            ? declared
-            : undefined;
-      if (chosen) get().setFocal(chosen);
+      if (declared && model.persons.has(declared)) get().setFocal(declared);
       else set({ focalPickerOpen: true });
     },
 
     setFocal: (personId) => {
-      const { graph, model, viewOptions, fileName } = get();
+      const { graph, model, viewOptions } = get();
       if (!graph || !model) return;
-      rememberFocal(fileName, personId);
       set({
         focalPersonId: personId,
         ...deriveFocalState(graph, model, personId, viewOptions),
@@ -588,8 +592,15 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setViewOptions: (partial) => {
-      const { graph, model, focalPersonId, collapseSet, genMap, viewOptions, highlight } =
-        get();
+      const {
+        graph,
+        model,
+        focalPersonId,
+        collapseSet,
+        genMap,
+        viewOptions,
+        highlight,
+      } = get();
       const next = { ...viewOptions, ...partial };
       if (!graph || !model || !focalPersonId) {
         set({ viewOptions: next });
@@ -636,7 +647,11 @@ export const useStore = create<AppState>((set, get) => {
       applyOpLog(
         [...ops, { kind: 'merge', keepId, mergeId, at: new Date().toISOString() }],
         [],
-        { focusId: keepId, notice: 'Merged. Undo it any time from the Review tab.', addedIds: [keepId] },
+        {
+          focusId: keepId,
+          notice: 'Merged. Undo it any time from the Review tab.',
+          addedIds: [keepId],
+        },
       );
       set({ mergeOpen: false });
     },
@@ -717,7 +732,12 @@ export const useStore = create<AppState>((set, get) => {
 
     editEvent: (eventId, patch) => {
       const { ops } = get();
-      const op: EditOp = { kind: 'editEvent', eventId, at: new Date().toISOString(), ...patch };
+      const op: EditOp = {
+        kind: 'editEvent',
+        eventId,
+        at: new Date().toISOString(),
+        ...patch,
+      };
       applyOpLog([...ops, op], [], { notice: 'Event updated.' });
     },
 
@@ -756,12 +776,185 @@ export const useStore = create<AppState>((set, get) => {
       persist(get);
     },
 
+    // ---- session lifecycle ----
+
+    setSessionStore: (store) => set({ session: store }),
+
+    flushSaves: async () => {
+      await scheduler?.flush();
+    },
+
+    importGedcom: async (bytes, fileName) => {
+      // Flush whatever project is currently open before we start reassigning
+      // state out from under it. The scheduler snapshots at *run* time, so an
+      // outgoing project's pending debounce would otherwise silently get
+      // repointed at the incoming one by the `persist(get)` below (which just
+      // reschedules the same timer) - discarding, not deferring, any edit
+      // made in the last 300ms/1s.
+      await get().flushSaves();
+
+      const hash = await sha256Hex(bytes);
+      const { session, workspace } = get();
+
+      // 1. Same bytes already imported? Reopen, keeping every edit.
+      const records = session ? await session.listProjects() : [];
+      const sessionHit = records.find((r) => r.sourceHash === hash);
+      if (sessionHit) {
+        await get().openProjectByName(sessionHit.name);
+        // openProjectByName has a real failure path (bad/missing project);
+        // only claim success if the open actually landed - otherwise leave
+        // its own failure notice in place rather than paving over it.
+        if (get().projectName === sessionHit.name) {
+          set({ notice: `Reopened "${sessionHit.name}".` });
+        }
+        return;
+      }
+      if (workspace) {
+        const summaries = await workspace.listProjectSummaries();
+        const folderHit = summaries.find((p) => p.sourceHash === hash);
+        if (folderHit) {
+          await get().openProjectByName(folderHit.name);
+          if (get().projectName === folderHit.name) {
+            set({ notice: `Reopened "${folderHit.name}".` });
+          }
+          return;
+        }
+      }
+
+      // 2. New content: create a project named from the file. Seed `taken`
+      // with the project currently open (it may not appear in `records` or a
+      // folder listing yet - nothing has autosaved it there) and a *fresh*
+      // folder name listing rather than the cached `projects`, which can lag
+      // a folder create still sitting behind its own debounce. Without both,
+      // two different files that happen to share a name can be assigned the
+      // same project name, and the second autosave silently overwrites the
+      // first project's op-log and source hash while its GEDCOM stays on disk.
+      const currentName = get().projectName;
+      const folderNames = workspace ? await workspace.listProjects() : get().projects;
+      const taken = [
+        ...records.map((r) => r.name),
+        ...folderNames,
+        ...(currentName ? [currentName] : []),
+      ];
+      const name = uniqueProjectName(sanitizeProjectName(fileName), taken);
+      const now = new Date().toISOString();
+
+      get().loadModel(parseGedcom(bytes), fileName, bytes);
+
+      // A file that parses to no individuals is not a tree: a .txt, a PDF
+      // renamed, a truncated GEDCOM. loadModel has already said so and cleared
+      // the project - so stop here rather than overwrite its notice with
+      // `Created project "..."`, persist a junk record, and repoint
+      // lastProject at it, which would make the next boot restore the junk
+      // instead of the user's real tree.
+      if (get().model?.persons.size === 0) return;
+
+      set({
+        projectName: name,
+        sourceHash: hash,
+        projectCreatedAt: now,
+        notice: `Created project "${name}".`,
+      });
+      // A brand-new record: nothing stored to compare against, and any
+      // conflict latched before this import no longer applies - not even one
+      // latched on this same name, which happens when the contested project is
+      // deleted and a new file takes the freed name.
+      scheduler?.noteOpened(name, null);
+
+      if (session) void requestPersistentStorage();
+      persist(get);
+      await get().refreshProjects();
+    },
+
+    /**
+     * Cold start. Two independent halves: the project restores from the session
+     * store with no permission and no user gesture, and the folder rebinds
+     * opportunistically. A restored project renders whether or not the folder
+     * comes back, so the folder half runs second and is wrapped - nothing it
+     * does (or fails to do) may undo or abort the restore above it.
+     */
+    restoreSession: async () => {
+      const { session } = get();
+      if (session) {
+        const lastName = await session.getLastProject();
+        const record = lastName ? await session.getProject(lastName) : null;
+        const source = record ? await session.getSource(record.sourceHash) : null;
+
+        if (record && source) {
+          const baseModel = parseGedcom(source);
+          const model = applyOps(baseModel, record.ops);
+          const graph = buildGraph(model);
+          set({
+            ...emptyInternal,
+            baseModel,
+            ops: record.ops,
+            redoStack: [],
+            model,
+            graph,
+            fileName: record.sourceFileName,
+            sourceBytes: source,
+            sourceHash: record.sourceHash,
+            projectName: record.name,
+            projectCreatedAt: record.createdAt,
+            checklists: record.checklists,
+            settings: record.settings,
+            warnings: model.warnings,
+            focalPersonId: null,
+            view: null,
+            collapsePoints: [],
+            detailPersonId: null,
+            selectedIds: [],
+            highlight: null,
+            focalPickerOpen: false,
+            mergeOpen: false,
+            notice: null,
+            mapAncestorId: null,
+            saveState: { status: 'saved', lastSavedAt: record.updatedAt },
+          });
+          // This record is what our next save is based on. Telling the
+          // scheduler makes the first write after a cold start compare against
+          // it, so a second tab that has since written this project is noticed
+          // instead of being overwritten.
+          scheduler?.noteOpened(record.name, record.updatedAt);
+          const focal = record.focalPersonId;
+          if (focal && model.persons.has(focal)) get().setFocal(focal);
+          else if (model.persons.size > 0) set({ focalPickerOpen: true });
+        } else if (record) {
+          // Pointer survived but the bytes did not - clear it so the next boot
+          // starts clean instead of hitting this every time.
+          await session.setLastProject(null);
+          set({
+            notice: `Project "${record.name}" could not be restored — its source is missing.`,
+          });
+        } else if (lastName) {
+          // Pointer to a record that is no longer there at all. Nothing worth
+          // telling the user (the project is simply gone), but the dangling
+          // pointer must not survive to the next boot.
+          await session.setLastProject(null);
+        }
+        // The project list has to be populated here, not by the folder half:
+        // with no folder ever connected, restoreWorkspace returns at its
+        // 'none' branch and backfillFolder is skipped, so nothing else would
+        // ever list the browser-only projects this union exists for.
+        await get().refreshProjects();
+      }
+
+      try {
+        await get().restoreWorkspace();
+        if (get().workspace) await get().backfillFolder();
+      } catch {
+        // The folder is opportunistic. A throw here (revoked handle, unplugged
+        // drive) is a folder status change, never a failed restore.
+        set({ folderStatus: 'error' });
+      }
+    },
+
     // ---- workspace / projects / vault ----
 
     connectWorkspace: async () => {
       const handle = await pickDirectory();
       if (!handle) return;
-      if (!(await ensurePermission(handle))) {
+      if (!(await requestPermissionInteractive(handle))) {
         set({ notice: 'Permission to the workspace folder was denied.' });
         return;
       }
@@ -770,6 +963,7 @@ export const useStore = create<AppState>((set, get) => {
       set({
         workspace: ws,
         workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
         notice: 'Workspace connected.',
       });
       await get().refreshProjects();
@@ -778,30 +972,117 @@ export const useStore = create<AppState>((set, get) => {
 
     restoreWorkspace: async () => {
       const handle = await loadHandle();
-      if (!handle) return;
-      if (!(await ensurePermission(handle))) return; // user can re-grant from the UI
+      if (!handle) {
+        set({ folderStatus: 'none' });
+        return;
+      }
+      if (!(await hasPermission(handle))) {
+        // The grant lapsed. Surface a Reconnect control rather than failing mute;
+        // re-granting needs a user gesture we do not have here.
+        set({ folderStatus: 'needs-permission' });
+        return;
+      }
       const ws = new Workspace(dirFromHandle(handle));
       set({
         workspace: ws,
         workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
       });
       await get().refreshProjects();
       await get().refreshVault();
     },
 
+    /** Re-grant permission to the remembered folder. Must be called from a click. */
+    reconnectWorkspace: async () => {
+      const handle = await loadHandle();
+      if (!handle) {
+        await get().connectWorkspace();
+        return;
+      }
+      if (!(await requestPermissionInteractive(handle))) {
+        set({
+          folderStatus: 'needs-permission',
+          notice: 'Folder permission was denied.',
+        });
+        return;
+      }
+      const ws = new Workspace(dirFromHandle(handle));
+      set({
+        workspace: ws,
+        workspaceName: (handle as { name?: string }).name ?? 'workspace',
+        folderStatus: 'connected',
+        notice: 'Workspace reconnected.',
+      });
+      await get().refreshProjects();
+      await get().refreshVault();
+      await get().backfillFolder();
+    },
+
+    /**
+     * Mirror any project that exists only in the browser to the bound folder.
+     * Runs after a folder is connected or rebound: the session store is the
+     * authoritative copy, so the folder is brought up to it, never the reverse.
+     * A project already on disk is left completely alone - the folder copy may
+     * be the newer one, and this is a backfill, not a sync.
+     */
+    backfillFolder: async () => {
+      const { workspace, session } = get();
+      if (!workspace || !session) return;
+      try {
+        const onDisk = new Set(await workspace.listProjects());
+        for (const record of await session.listProjects()) {
+          if (onDisk.has(record.name)) continue;
+          const source = await session.getSource(record.sourceHash);
+          if (!source) continue;
+          await workspace.createProject(
+            record.name,
+            source,
+            record.sourceFileName,
+            record.sourceHash,
+          );
+          await workspace.saveProject(toProjectFile(record));
+        }
+        set({ folderStatus: 'connected' });
+        await get().refreshProjects();
+      } catch {
+        set({ folderStatus: 'error' });
+      }
+    },
+
     disconnectWorkspace: async () => {
       await clearHandle();
-      set({ workspace: null, workspaceName: null, projects: [], projectName: null, vaultDocs: [] });
+      // Disconnecting stops the folder *mirror*, not the browser copy: the
+      // open project (and its autosave to the session store) must keep
+      // running, or every edit made after this point is silently lost.
+      set({
+        workspace: null,
+        workspaceName: null,
+        folderStatus: 'none',
+        vaultDocs: [],
+      });
+      // Projects also live in the browser now; re-derive the list from the
+      // session store rather than assuming disconnecting the folder empties it.
+      await get().refreshProjects();
     },
 
     refreshProjects: async () => {
-      const { workspace } = get();
-      if (!workspace) return;
+      const { workspace, session } = get();
+      const names = new Set<string>();
+      // Union of both backends: a project can exist only in the browser (no
+      // folder ever connected) or only on disk (written by another machine).
+      // Guarded separately on purpose - a broken folder must not hide the
+      // browser's own projects, which are the authoritative copy.
       try {
-        set({ projects: await workspace.listProjects() });
+        if (workspace) for (const n of await workspace.listProjects()) names.add(n);
       } catch {
-        /* ignore */
+        /* ignore - a partial list is better than none */
       }
+      try {
+        if (session) for (const r of await session.listProjects()) names.add(r.name);
+      } catch {
+        /* ignore - a partial list is better than none */
+      }
+      set({ projects: [...names].sort((a, b) => a.localeCompare(b)) });
     },
 
     refreshVault: async () => {
@@ -814,41 +1095,58 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
 
-    saveAsProject: async (name) => {
-      const { workspace, sourceBytes, fileName, ops, focalPersonId, checklists, settings } =
-        get();
-      if (!workspace || !sourceBytes) {
-        set({ notice: 'Connect a workspace and load a file first.' });
-        return;
-      }
-      await workspace.createProject(name, sourceBytes, fileName ?? 'source.ged');
-      const project: ProjectFile = {
-        format: 'genealogy-graph/project',
-        version: 1,
-        name,
-        sourceFile: 'source.ged',
-        sourceFileName: fileName ?? 'source.ged',
-        focalPersonId,
-        ops,
-        checklists,
-        settings,
-        updatedAt: new Date().toISOString(),
-      };
-      await workspace.saveProject(project);
-      set({ projectName: name, notice: `Saved as project "${name}".` });
-      await get().refreshProjects();
-    },
-
     openProjectByName: async (name) => {
-      const { workspace } = get();
-      if (!workspace) return;
-      const opened = await workspace.openProject(name);
-      if (!opened) {
-        set({ notice: `Could not open project "${name}".` });
-        return;
+      await get().flushSaves(); // don't lose pending edits on the outgoing project
+      const { workspace, session } = get();
+
+      // Prefer the browser copy: it is authoritative and needs no permission,
+      // so a reopen works with no folder connected at all.
+      const record = session ? await session.getProject(name) : null;
+      const cached =
+        record && session ? await session.getSource(record.sourceHash) : null;
+
+      let gedcomBytes: Uint8Array;
+      let ops: EditOp[];
+      let checklists: SarChecklistState[];
+      let settings: ProjectSettings;
+      let sourceHash: string;
+      let sourceFileName: string;
+      let createdAt: string;
+      let focalPersonId: string | null;
+
+      if (record && cached) {
+        gedcomBytes = cached;
+        ({ ops, checklists, settings, sourceHash, sourceFileName, focalPersonId } =
+          record);
+        createdAt = record.createdAt;
+      } else {
+        // Every exit from here sets a notice: a reopen that cannot proceed must
+        // never look like nothing happened.
+        if (!workspace) {
+          set({ notice: `Could not open project "${name}".` });
+          return;
+        }
+        const opened = await workspace.openProject(name);
+        if (!opened) {
+          set({ notice: `Could not open project "${name}".` });
+          return;
+        }
+        gedcomBytes = opened.gedcomBytes;
+        ops = opened.project.ops;
+        checklists = opened.project.checklists;
+        settings = opened.project.settings;
+        sourceFileName = opened.project.sourceFileName;
+        focalPersonId = opened.project.focalPersonId;
+        // ProjectFile has no createdAt; its updatedAt is the best available
+        // lower bound and only ever seeds a record that has none yet.
+        createdAt = opened.project.updatedAt;
+        // A folder project written before sourceHash existed carries ''.
+        // snapshotOf refuses to autosave on a falsy hash, so without computing
+        // one here the project would never save and would report no error.
+        sourceHash = opened.project.sourceHash || (await sha256Hex(gedcomBytes));
       }
-      const baseModel = parseGedcom(opened.gedcomBytes);
-      const ops = opened.project.ops;
+
+      const baseModel = parseGedcom(gedcomBytes);
       const model = applyOps(baseModel, ops);
       const graph = buildGraph(model);
       set({
@@ -858,8 +1156,14 @@ export const useStore = create<AppState>((set, get) => {
         redoStack: [],
         model,
         graph,
-        fileName: opened.project.sourceFileName,
-        sourceBytes: opened.gedcomBytes,
+        fileName: sourceFileName,
+        sourceBytes: gedcomBytes,
+        sourceHash,
+        projectName: name,
+        projectCreatedAt: createdAt,
+        checklists,
+        settings,
+        saveState: { status: 'idle', lastSavedAt: null },
         warnings: model.warnings,
         focalPersonId: null,
         view: null,
@@ -871,29 +1175,150 @@ export const useStore = create<AppState>((set, get) => {
         mergeOpen: false,
         notice: `Opened project "${name}".`,
         mapAncestorId: null,
-        projectName: name,
-        checklists: opened.project.checklists,
-        settings: opened.project.settings,
       });
-      const focal = opened.project.focalPersonId;
-      if (focal && model.persons.has(focal)) get().setFocal(focal);
+      // Base the next save on the record we just read (null when there is no
+      // stored record yet - a folder-only project). Also retires any latched
+      // conflict, so both switching projects and re-opening the contested one
+      // resume saving instead of going quietly dead: we are now working from
+      // the record we just re-read, and the claim above is staked on it.
+      scheduler?.noteOpened(name, record?.updatedAt ?? null);
+
+      if (focalPersonId && model.persons.has(focalPersonId))
+        get().setFocal(focalPersonId);
       else if (model.persons.size > 0) set({ focalPickerOpen: true });
+
+      // Cache a folder-only project into the session store so the next cold
+      // start restores it without the folder being present. Reached on both
+      // paths: harmless re-save for one that was already there.
+      persist(get);
       await get().refreshVault();
     },
 
-    renameCurrentProject: async (name) => {
-      const { workspace, projectName } = get();
-      if (!workspace || !projectName) return;
-      const renamed = await workspace.renameProject(projectName, name);
-      if (renamed) set({ projectName: name, notice: `Renamed to "${name}".` });
+    renameCurrentProject: async (requested) => {
+      const { projectName } = get();
+      if (!projectName) return;
+
+      // These become Windows directory names, which is the whole reason
+      // sanitizeProjectName exists - but only importGedcom was calling it.
+      // "Wills/Deeds" made the folder rename throw (swallowed), the session
+      // rename succeed, and the app adopt a name every later folder write
+      // would throw on: a permanent "Can't write to the workspace folder"
+      // banner with a Reconnect button that could never fix it.
+      const name = sanitizeProjectName(requested);
+
+      if (name === projectName) {
+        // Asking for the name it already has is not an error, and must not be
+        // allowed to reach the renames below, where "rename onto yourself"
+        // means copy-then-delete-the-original.
+        set({ notice: `"${projectName}" already has that name.` });
+        return;
+      }
+      if (name.toLowerCase() === projectName.toLowerCase()) {
+        // A letters-only case change. On Windows (and on the File System
+        // Access API over it) the target directory *is* the source directory,
+        // so renameProject would copy the project onto itself and then delete
+        // it. Refuse loudly rather than destroy a tree to restyle its name.
+        set({
+          notice: `"${projectName}" already has that name — folder names ignore capitalisation, so nothing was changed.`,
+        });
+        return;
+      }
+
+      // Settle any pending save under the OLD name and disarm both timers
+      // first. A debounce firing partway through the renames below would write
+      // the old record straight back, leaving a duplicate the rename just moved.
+      await get().flushSaves();
+      const { workspace, session, sourceHash } = get();
+
+      // Collision guard. Neither backend has one of its own: Workspace.rename
+      // opens the target directory with create=true (getting the *existing*
+      // one), writes our files into it and then recursively deletes our old
+      // folder, while IdbSessionStore.renameProject puts straight over
+      // whatever record sits under the target key. uniqueProjectName hands out
+      // names like "Smith Tree (2)" precisely so people rename them back to
+      // "Smith Tree", so this is one click away, and it would destroy the
+      // original in the browser and on disk simultaneously.
+      let folderNames: string[];
+      try {
+        folderNames = workspace ? await workspace.listProjects() : [];
+      } catch {
+        // A folder we cannot list is a folder we cannot check for collisions.
+        // Refuse the whole rename rather than do half of it.
+        set({
+          notice: `Could not rename "${projectName}" — the workspace folder could not be read.`,
+        });
+        return;
+      }
+      const sessionNames = session
+        ? (await session.listProjects()).map((r) => r.name)
+        : [];
+      // Case-insensitively, because these are Windows directory names. Our own
+      // name cannot be in the way here: both spellings of "same name" returned
+      // above.
+      const target = name.toLowerCase();
+      if ([...folderNames, ...sessionNames].some((n) => n.toLowerCase() === target)) {
+        set({
+          notice: `A project named "${name}" already exists. Renaming onto it would replace it, so nothing was changed.`,
+        });
+        return;
+      }
+
+      // Only rename a folder project that is provably ours. `name-conflict` is
+      // set precisely when the folder project sharing our name is a *different*
+      // tree; renaming then would move the user's untouched on-disk tree
+      // somewhere they never asked for, leave it unreachable through the app
+      // (the session copy wins in openProjectByName), and set it up to be
+      // destroyed by a later Delete on what looks like a duplicate.
+      const folderCmp = workspace
+        ? await workspace.compareSource(projectName, sourceHash ?? '')
+        : 'absent';
+      const folderIsOurs = folderCmp === 'match';
+      const wsOk = folderIsOurs
+        ? (await workspace!.renameProject(projectName, name)) !== null
+        : false;
+      const sessionOk = session
+        ? (await session.renameProject(projectName, name)) !== null
+        : false;
+      // Both backends refused (or there were none). Bail rather than adopt the
+      // new name: persist() would then write a fresh record under it and leave
+      // the surviving original beside it as a duplicate.
+      if (!wsOk && !sessionOk) {
+        set({ notice: `Could not rename "${projectName}".` });
+        return;
+      }
+      // Say what actually happened. Renaming to a name the user did not type
+      // (because it had to be made legal) is not a silent success, and neither
+      // is leaving a folder project of the same name standing.
+      const adjusted =
+        name !== requested.trim() ? ` (adjusted from "${requested.trim()}")` : '';
+      // Only when there really is a foreign project standing under the old
+      // name - 'absent' means the folder simply had nothing there yet.
+      const leftAlone =
+        folderCmp === 'differs' || folderCmp === 'unknown'
+          ? ` A different project is stored as "${projectName}" in the workspace folder; it was left exactly as it was.`
+          : '';
+      set({
+        projectName: name,
+        notice: `Renamed to "${name}"${adjusted}.${leftAlone}`,
+      });
+      persist(get);
       await get().refreshProjects();
     },
 
     deleteProjectByName: async (name) => {
-      const { workspace, projectName } = get();
-      if (!workspace) return;
-      await workspace.deleteProject(name);
-      if (projectName === name) set({ projectName: null });
+      const { workspace, session, projectName } = get();
+      // Clear the open project BEFORE touching either backend: this makes
+      // snapshotOf return null, so a save still sitting behind its debounce
+      // cannot fire during the awaits below and resurrect the record.
+      if (projectName === name) {
+        set({ projectName: null, sourceHash: null, projectCreatedAt: null });
+      }
+      if (workspace) await workspace.deleteProject(name);
+      if (session) {
+        await session.deleteProject(name);
+        // Never leave the next boot pointing at a record that is gone.
+        if (projectName === name) await session.setLastProject(null);
+      }
       await get().refreshProjects();
     },
 
@@ -929,7 +1354,10 @@ export const useStore = create<AppState>((set, get) => {
         proofs: [],
         createdAt: new Date().toISOString(),
       };
-      set((s) => ({ checklists: [...s.checklists, checklist], notice: 'Checklist created.' }));
+      set((s) => ({
+        checklists: [...s.checklists, checklist],
+        notice: 'Checklist created.',
+      }));
       persist(get);
       return id;
     },
@@ -968,4 +1396,28 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
   };
+});
+
+// The scheduler pulls live state through `useStore.getState()`, so it is wired
+// after the store exists. Snapshot-on-run (not on-schedule) is what lets a burst
+// of edits collapse into one write of the final state.
+scheduler = new SaveScheduler({
+  snapshot: () => snapshotOf(useStore.getState()),
+  session: () => useStore.getState().session,
+  workspace: () => useStore.getState().workspace,
+  onSaveState: (status, at, blockedReason) =>
+    useStore.setState((s) => ({
+      saveState: {
+        status,
+        lastSavedAt: at ?? s.saveState.lastSavedAt,
+        // Always reassigned, never merged: a save that succeeds must clear the
+        // last reason it failed, or the banner outlives the problem.
+        blockedReason,
+      },
+    })),
+  onFolderState: (status) => useStore.setState({ folderStatus: status }),
+  onConflict: (name) =>
+    useStore.setState({
+      notice: `"${name}" is open in another tab. Editing is no longer being saved here - close this tab or reload to continue.`,
+    }),
 });

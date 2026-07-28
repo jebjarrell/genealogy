@@ -1,0 +1,867 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Debounced, SaveScheduler, type SaveSnapshot } from './persistence.js';
+import { MemSessionStore } from '../fs/memSessionStore.js';
+import { makeRecord } from '../fs/sessionStore.contract.js';
+import { Workspace } from '../fs/workspace.js';
+import { MemDir } from '../fs/memfs.js';
+import type { SessionProjectRecord, SessionStore } from '../fs/sessionStore.js';
+
+const GED = new TextEncoder().encode('0 HEAD\n0 @I1@ INDI\n0 TRLR\n');
+
+describe('Debounced', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('coalesces repeated schedules into a single run', async () => {
+    const run = vi.fn(async () => {});
+    const d = new Debounced(300, run);
+    d.schedule();
+    d.schedule();
+    d.schedule();
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('fire() runs immediately and cancels the pending timer', async () => {
+    const run = vi.fn(async () => {});
+    const d = new Debounced(300, run);
+    d.schedule();
+    expect(d.pending).toBe(true);
+    await d.fire();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(d.pending).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(run).toHaveBeenCalledTimes(1); // the timer did not also fire
+  });
+
+  // Widened from the brief's original (a single reentrant fire()) per review:
+  // with only one reentrant call, an implementation that queued one catch-up
+  // run *per request* would also produce exactly 2 total run() calls here,
+  // so that version of the test could not distinguish "one catch-up run"
+  // from "one catch-up run per request." Issuing three reentrant calls before
+  // release() pins the stronger guarantee: still exactly 2 runs total.
+  it('serializes overlapping runs and re-runs exactly once for all work queued mid-flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const run = vi.fn(async () => {
+      if (run.mock.calls.length === 1) await gate;
+    });
+    const d = new Debounced(300, run);
+
+    const first = d.fire();
+    const second = d.fire(); // three requests arrive while the first is still running
+    const third = d.fire();
+    const fourth = d.fire();
+    expect(run).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second, third, fourth]);
+    // A "queue one catch-up per request" implementation would call run() 4
+    // times here; the guarantee is exactly one catch-up covering all of them.
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression test for a race in the brief's original sample: a fire() call
+  // that arrives while a run is already in flight set the dirty flag and
+  // returned right away, without waiting for the catch-up run it had just
+  // queued. That breaks the exact guarantee this class exists for -- callers
+  // like SaveScheduler.flush() need "the write has happened" by the time the
+  // returned promise resolves, not just "the write has been queued." This
+  // test pins the caller's promise to the completion of the run it triggers.
+  it('fire() called while running does not resolve until the run it queued finishes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const run = vi.fn(async () => {
+      if (run.mock.calls.length === 1) await gate;
+    });
+    const d = new Debounced(300, run);
+
+    const first = d.fire();
+    const second = d.fire();
+    let secondResolved = false;
+    void second.then(() => {
+      secondResolved = true;
+    });
+
+    // Let any already-settled microtasks drain; the gate is still closed.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(secondResolved).toBe(false);
+
+    release();
+    await second;
+    expect(secondResolved).toBe(true);
+    expect(run).toHaveBeenCalledTimes(2);
+    await first;
+  });
+
+  // Regression test for a narrower, one-tick version of the same bug (review
+  // finding I-1), which survives even after the fix above: the first
+  // implementation of the fix cleared the "run in flight" marker in fire()'s
+  // own continuation, one microtask *after* the run it was tracking actually
+  // settled. A fire() landing in that exact gap saw a non-null marker,
+  // "joined" it, and got a promise that had already resolved without ever
+  // covering the joiner's request - a silent lost write, just harder to hit.
+  //
+  // This test does not rely on timing luck: it chains its own probe directly
+  // off the same promise the class is already internally awaiting, via
+  // `run.mock.results`, so the probe is guaranteed to run in the same
+  // microtask batch as - and immediately after - the class's own internal
+  // continuation for that promise. That is deterministically the gap in
+  // question, every run.
+  it('fire() arriving in the microtask gap right after settlement still gets its own run', async () => {
+    const resolvers: Array<() => void> = [];
+    const run = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const d = new Debounced(300, run);
+
+    const first = d.fire();
+    expect(run).toHaveBeenCalledTimes(1);
+    const p1 = run.mock.results[0]!.value as Promise<void>;
+
+    let second: Promise<void> | undefined;
+    // Registered on the exact promise the class's internal `await this.run()`
+    // is already waiting on. When p1 settles, handlers run in registration
+    // order: the class's own continuation first (same microtask batch), this
+    // probe second - landing precisely in the settle-to-clear gap.
+    const probeRan = p1.then(() => {
+      second = d.fire();
+    });
+
+    resolvers[0]!();
+    await probeRan;
+    expect(second).toBeDefined();
+
+    // If the joiner correctly triggered its own run (the fix), a second
+    // run() call is now genuinely in flight and needs its own resolution.
+    // If it instead silently adopted the already-settled promise from run #1
+    // (the bug), no second call ever happens and there is nothing to do here
+    // - `second` will still resolve on its own, just without covering the
+    // joiner's request, which is exactly what the assertion below catches.
+    if (resolvers.length > 1) resolvers[1]!();
+
+    await second;
+    await first;
+
+    // With the bug, the joiner's dirty flag is set but nothing ever rechecks
+    // it, so run() is called only once total.
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SaveScheduler', () => {
+  let session: MemSessionStore;
+  let workspace: Workspace;
+  let snapshot: SaveSnapshot;
+  let schedulers: SaveScheduler[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    session = new MemSessionStore();
+    workspace = new Workspace(new MemDir());
+    snapshot = {
+      record: makeRecord({ name: 'tree', sourceHash: 'h1' }),
+      sourceBytes: GED,
+    };
+    schedulers = [];
+  });
+
+  afterEach(() => {
+    // Fixtures above are shared `let` bindings captured by the option thunks
+    // passed to each SaveScheduler. A straggling debounce timer or catch-up
+    // run left over from one test could still fire during a later test and
+    // write into that test's fresh fixtures. Dispose every scheduler created
+    // in make() so nothing outlives its test.
+    for (const s of schedulers) s.dispose();
+    vi.useRealTimers();
+  });
+
+  const make = (over: Partial<ConstructorParameters<typeof SaveScheduler>[0]> = {}) => {
+    const states: string[] = [];
+    /** Every onSaveState call as `status` or `status:reason`, in order. */
+    const reported: string[] = [];
+    const folders: string[] = [];
+    const scheduler = new SaveScheduler({
+      snapshot: () => snapshot,
+      session: () => session,
+      workspace: () => workspace,
+      onSaveState: (status, _at, reason) => {
+        states.push(status);
+        reported.push(reason ? `${status}:${reason}` : status);
+      },
+      onFolderState: (status) => folders.push(status),
+      ...over,
+    });
+    schedulers.push(scheduler);
+    return { scheduler, states, folders, reported };
+  };
+
+  it('writes the project record and source to the session store', async () => {
+    const { scheduler, states } = make();
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect((await session.getProject('tree'))!.sourceHash).toBe('h1');
+    expect(await session.hasSource('h1')).toBe(true);
+    expect(await session.getLastProject()).toBe('tree');
+    expect(states).toContain('saving');
+    expect(states).toContain('saved');
+  });
+
+  it('writes the source bytes only once across repeated saves', async () => {
+    const { scheduler } = make();
+    const spy = vi.spyOn(session, 'putSource');
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('mirrors to the workspace folder on the slower interval', async () => {
+    const { scheduler, folders } = make();
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await workspace.listProjects()).toEqual([]); // folder write not due yet
+    await vi.advanceTimersByTimeAsync(700);
+    expect(await workspace.listProjects()).toEqual(['tree']);
+    expect(folders).toContain('connected');
+  });
+
+  it('flush() writes both targets immediately', async () => {
+    const { scheduler } = make();
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await session.getProject('tree')).not.toBeNull();
+    expect(await workspace.listProjects()).toEqual(['tree']);
+  });
+
+  it('reports a folder failure but still saves to the session store', async () => {
+    const { scheduler, states, folders } = make();
+    vi.spyOn(workspace, 'saveProject').mockRejectedValue(new Error('drive gone'));
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(await session.getProject('tree')).not.toBeNull(); // browser copy is safe
+    expect(folders).toContain('error');
+    expect(states).not.toContain('error'); // the authoritative write succeeded
+  });
+
+  it('reports an error when the session write fails', async () => {
+    session.failWrites = true;
+    const { scheduler, states } = make();
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(states).toContain('error');
+  });
+
+  // Regression test for a second defect in the brief's sample: it called
+  // session.setLastProject() unconditionally, even when putProject had just
+  // returned false. That leaves a dangling "last project" pointer at a record
+  // that was never actually written, so restoring on next load would look for
+  // a project that isn't there.
+  it('does not update the last-project pointer when the session write fails', async () => {
+    session.failWrites = true;
+    const { scheduler } = make();
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await session.getLastProject()).toBeNull();
+  });
+
+  it('does nothing when there is no snapshot to save', async () => {
+    const { scheduler, states } = make({ snapshot: () => null });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await session.listProjects()).toEqual([]);
+    expect(states).not.toContain('saved');
+  });
+
+  it('skips the folder write when no workspace is connected', async () => {
+    const { scheduler, folders } = make({ workspace: () => null });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await session.getProject('tree')).not.toBeNull();
+    expect(folders).not.toContain('error');
+  });
+
+  // Regression test (review finding M-3): guarantee 2 - "a burst of edits
+  // collapses into one write of the latest state" - was never actually
+  // exercised. Every existing test calls schedule() once and never mutates
+  // the snapshot before the timer fires, so a scheduler that captured the
+  // snapshot at schedule() time (instead of at run time) would have passed
+  // all of them too. Mutate the snapshot after schedule() and confirm the
+  // value that lands is the latest one, not the one at schedule() time.
+  it('captures the snapshot at run time, so a late edit before the debounce fires still lands', async () => {
+    const { scheduler } = make();
+    scheduler.schedule();
+    snapshot = {
+      ...snapshot,
+      record: { ...snapshot.record, focalPersonId: 'I42' },
+    };
+    await vi.advanceTimersByTimeAsync(300);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('I42');
+  });
+
+  // Regression test (review finding I-2): a SessionStore whose putSource()
+  // silently fails to persist (both real implementations can do this -
+  // MemSessionStore under failWrites, and IdbSessionStore/idbPut swallowing
+  // onerror/onabort) must not be cached as "stored." If it were, a later
+  // putProject() that happens to succeed (a small record can fit where a
+  // large GEDCOM did not) would report "saved" for a project record whose
+  // sourceHash points at a blob that was never written - unopenable on
+  // reload. This store's putProject() always succeeds even though putSource()
+  // never actually stores anything, isolating the case from the store-wide
+  // failWrites flag used elsewhere.
+  class SourceDroppingStore implements SessionStore {
+    private projects = new Map<string, SessionProjectRecord>();
+    private last: string | null = null;
+    available(): boolean {
+      return true;
+    }
+    async putSource(): Promise<void> {
+      /* silently drops the write, like a quota-exceeded IndexedDB put */
+    }
+    async getSource(): Promise<Uint8Array | null> {
+      return null;
+    }
+    async hasSource(): Promise<boolean> {
+      return false; // never actually landed
+    }
+    async deleteSource(): Promise<void> {}
+    async putProject(record: SessionProjectRecord): Promise<boolean> {
+      this.projects.set(record.name, record);
+      return true;
+    }
+    async getProject(name: string): Promise<SessionProjectRecord | null> {
+      return this.projects.get(name) ?? null;
+    }
+    async listProjects(): Promise<SessionProjectRecord[]> {
+      return [...this.projects.values()];
+    }
+    async deleteProject(name: string): Promise<void> {
+      this.projects.delete(name);
+    }
+    async renameProject(): Promise<SessionProjectRecord | null> {
+      return null;
+    }
+    async getLastProject(): Promise<string | null> {
+      return this.last;
+    }
+    async setLastProject(name: string | null): Promise<void> {
+      this.last = name;
+    }
+  }
+
+  it('reports an error (and does not write the project record) when the source write silently fails to land', async () => {
+    const flaky = new SourceDroppingStore();
+    const states: string[] = [];
+    const scheduler = new SaveScheduler({
+      snapshot: () => snapshot,
+      session: () => flaky,
+      workspace: () => null,
+      onSaveState: (status) => states.push(status),
+      onFolderState: () => {},
+    });
+    schedulers.push(scheduler);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(states).toContain('error');
+    expect(states).not.toContain('saved');
+    // Must not report the project as saved while its source never landed.
+    expect(await flaky.getProject('tree')).toBeNull();
+  });
+
+  // Regression test (review finding I-2, staleness half): the stored-sources
+  // cache must not outlive the store it was verified against. If the host's
+  // `session()` getter starts returning a different store instance (e.g.
+  // after a storage reconnect), a hash cached from the old store must not be
+  // trusted for the new one.
+  it('clears the stored-sources cache when the session store instance changes', async () => {
+    let current: SessionStore = session;
+    const scheduler = new SaveScheduler({
+      snapshot: () => snapshot,
+      session: () => current,
+      workspace: () => workspace,
+      onSaveState: () => {},
+      onFolderState: () => {},
+    });
+    schedulers.push(scheduler);
+
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await current.hasSource('h1')).toBe(true);
+
+    const next = new MemSessionStore();
+    current = next;
+    const spy = vi.spyOn(next, 'putSource');
+    scheduler.schedule();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(spy).toHaveBeenCalledTimes(1); // not skipped by a cache from the old store
+  });
+
+  // Regression test: the conflict-detection claim, like the stored-sources
+  // cache above, must not outlive the store instance it was staked against.
+  // If the host's `session()` getter starts pointing at a different store
+  // that happens to already hold a same-named record with a different
+  // updatedAt (not a lie - just unrelated data from a different backing
+  // store), a claim carried over from the old instance would compare
+  // cleanly against data it was never staked against and misfire a
+  // conflict on a perfectly healthy single tab. Pins the `this.claim =
+  // null` line in the session-instance-change branch of runSession().
+  it('does not compare a stale claim against an unrelated session store after an instance change', async () => {
+    const conflicts: string[] = [];
+    let current: SessionStore = session;
+    const { scheduler } = make({
+      session: () => current,
+      onConflict: (name) => conflicts.push(name),
+    });
+
+    // Stake a claim for "tree" against store 1.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Store 2 already holds a record named "tree" with a different
+    // updatedAt - written independently of anything this scheduler has
+    // done, simulating a reconnect to a store this tab did not just write.
+    const store2 = new MemSessionStore();
+    await store2.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    current = store2;
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual([]);
+    // The save proceeded and landed in the new store rather than being
+    // refused - store 2's placeholder record was overwritten, not left
+    // standing as though a conflict had been detected.
+    expect((await store2.getProject('tree'))!.updatedAt).not.toBe(
+      '2099-01-01T00:00:00.000Z',
+    );
+  });
+
+  // Regression test: two tabs open on the same project. Both autosave to the
+  // same session-store record; without detection, last-write-wins silently
+  // drops whichever tab saved second. This pins that the losing tab notices
+  // the record moved out from under it and stops writing rather than
+  // clobbering the other tab's work.
+  it('stops saving and reports a conflict when another tab wrote the record', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    // Another tab writes the same record behind our back.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree']);
+    // The other tab's write survived; we did not clobber it.
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+
+  // Regression test (fix round 1, finding 3): the test above flushes twice,
+  // so the conflict fires exactly once and cannot distinguish a latching
+  // scheduler from one that would happily resume saving on the next cycle.
+  // "Once true, stays true" is the whole contract of the `conflicted` flag -
+  // a stopped tab must not silently start clobbering again. Pin it with a
+  // third schedule()/flush() cycle after the conflict has already fired.
+  it('keeps refusing to save on later cycles once a conflict has latched', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree']); // fired once
+
+    // A later edit in this (losing) tab schedules another save. The latch
+    // must still be in effect - no second onConflict call, and still no
+    // write over the other tab's record.
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree']); // still just the one call
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+
+  // Regression test (fix round 1, finding 2): runFolder()'s guard never
+  // checked the conflicted flag, so the losing tab kept mirroring its own
+  // (stale) state to the workspace folder after the session-store conflict
+  // latched - silently diverging project.json from the winning tab's copy,
+  // while the notice claims "no longer being saved here."
+  it('stops mirroring to the workspace folder once a conflict has latched', async () => {
+    const { scheduler, folders } = make();
+
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(await workspace.listProjects()).toEqual(['tree']);
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+
+    // This save is refused by the session-store conflict check, latching
+    // `conflicted`. Change the folder-visible field too, so a still-running
+    // folder mirror would be caught in the act.
+    snapshot = {
+      ...snapshot,
+      record: { ...snapshot.record, focalPersonId: 'LOSING-TAB' },
+    };
+    scheduler.schedule();
+    await scheduler.flush();
+
+    const folderWritesBefore = folders.filter((s) => s === 'connected').length;
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders.filter((s) => s === 'connected').length).toBe(folderWritesBefore);
+    const onDisk = await workspace.openProject('tree');
+    expect(onDisk!.project.focalPersonId).not.toBe('LOSING-TAB');
+  });
+
+  // ---- Final review, item 5: two holes in runFolder's anti-corruption guard.
+
+  // 5b: a declared sourceHash of '' means UNKNOWN (the placeholder for
+  // project.json files written before the field existed), not "matches
+  // whatever you have" - snapshotOf already refuses to save on a falsy hash
+  // for exactly that reason. The old guard read '' as consent and wrote our
+  // op-log and our hash beside a stranger's source.ged, producing a project
+  // that silently replays foreign ops.
+  it("refuses to mirror over a folder project whose declared hash is '' but whose source is a different tree", async () => {
+    const { scheduler, folders } = make();
+    await workspace.createProject(
+      'tree',
+      new TextEncoder().encode('0 HEAD\n0 TRLR\n'),
+      'foreign.ged',
+    ); // hash ''
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders).toContain('name-conflict');
+    expect(folders).not.toContain('connected');
+    const onDisk = await workspace.openProject('tree');
+    // Untouched: still the foreign source, still no op-log of ours, and still
+    // not stamped with our hash.
+    expect(new TextDecoder().decode(onDisk!.gedcomBytes)).toContain('0 TRLR');
+    expect(onDisk!.project.sourceHash).toBe('');
+    expect(onDisk!.project.ops).toHaveLength(0);
+    // The browser copy - the authoritative one - still took the work.
+    expect(await session.getProject('tree')).not.toBeNull();
+  });
+
+  // 5a, at the level where it does damage: a drive that drops out mid-write
+  // leaves a truncated project.json beside a complete project.json.tmp.
+  // readSummary used to return null for that, which skipped the hash guard
+  // entirely and let the mirror write into a foreign project.
+  it('refuses to mirror over a foreign folder project whose project.json is truncated but whose temp file survives', async () => {
+    const { scheduler, folders } = make();
+    await workspace.createProject(
+      'tree',
+      new TextEncoder().encode('0 HEAD\n0 TRLR\n'),
+      'foreign.ged',
+      'foreign-hash',
+    );
+    const projects = await workspace.root.getDir('projects', false);
+    const dir = await projects!.getDir('tree', false);
+    const good = await (await dir!.getFile('project.json', false))!.readText();
+    await (await dir!.getFile('project.json.tmp', true))!.write(good);
+    await (await dir!.getFile('project.json', true))!.write(''); // truncated
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(folders).toContain('name-conflict');
+    expect(folders).not.toContain('connected');
+    expect((await workspace.openProject('tree'))!.project.sourceHash).toBe(
+      'foreign-hash',
+    );
+  });
+
+  // ---- Final review, item 3: a latched conflict must not silence the app.
+
+  it('reports a blocked save instead of returning silently when there is no session store', async () => {
+    const { scheduler, reported } = make({ session: () => null });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(reported).toContain('error:storage');
+  });
+
+  it('keeps reporting the conflict on every later cycle, so an edit cannot make the app look saved again', async () => {
+    const { scheduler, reported } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    const afterFirst = reported.filter((r) => r === 'error:conflict').length;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    scheduler.schedule();
+    await scheduler.flush();
+    // The refusal is re-asserted, not announced once and then hidden behind
+    // whatever status the next edit leaves behind.
+    expect(reported.filter((r) => r === 'error:conflict').length).toBeGreaterThan(
+      afterFirst,
+    );
+    // ...and the last thing said was the refusal, not 'saving' or 'saved'.
+    expect(reported[reported.length - 1]).toBe('error:conflict');
+  });
+
+  // The core of item 3: the latch used to be a scheduler-wide boolean, so the
+  // user could open a completely different project and the app would look
+  // entirely normal - project name in the header, no indicator, no banner,
+  // tree fully editable - while writing nothing, anywhere, ever again.
+  it('resumes saving when the user switches to a different project after a conflict', async () => {
+    const { scheduler } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // conflict latches on 'tree'
+
+    // The user opens another project, exactly as openProjectByName does.
+    snapshot = {
+      record: makeRecord({ name: 'second', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('second', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(await session.getProject('second')).not.toBeNull();
+    expect(await session.getLastProject()).toBe('second');
+    // The other tab's copy of the first project is still untouched.
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB');
+  });
+
+  // ...and clearing the latch must not resurrect the clobber it prevented.
+  // Switching back re-bases on the record actually loaded (noteOpened), so a
+  // later write by the other tab is detected again rather than overwritten.
+  it('re-detects a conflict after switching away and back to the contested project', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched
+    expect(conflicts).toEqual(['tree']);
+
+    // Away to another project...
+    snapshot = {
+      record: makeRecord({ name: 'second', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('second', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    // ...and back, re-reading 'tree' from the store (the other tab's version).
+    const reloaded = (await session.getProject('tree'))!;
+    snapshot = { record: reloaded, sourceBytes: GED };
+    scheduler.noteOpened('tree', reloaded.updatedAt);
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree']); // working from their data: no conflict
+
+    // Now the other tab writes again. That must be caught, not overwritten.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-06-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB-AGAIN',
+    });
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual(['tree', 'tree']);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB-AGAIN');
+  });
+
+  // Regression test (fix round 1, finding 1): SessionStore.renameProject()
+  // moves a record to a new key while preserving its updatedAt - the only
+  // writer of a project record besides the scheduler itself. A rename
+  // round-trip (tree -> other -> tree) by a single, perfectly healthy tab
+  // used to leave a stale claim under the original name that no longer
+  // matched what the rename had just written there, latching a false
+  // conflict and permanently disabling autosave for a user who never had a
+  // second tab open. renameCurrentProject() always flushes immediately
+  // before each rename (to settle any pending save under the old name), so
+  // this reproduces without any waiting.
+  it('does not fire a false conflict after a project is renamed away and back to its original name', async () => {
+    const conflicts: string[] = [];
+    const { scheduler } = make({ onConflict: (name) => conflicts.push(name) });
+
+    // Save under the original name.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Rename tree -> other, mirroring renameCurrentProject(): flush first,
+    // then move the record.
+    await scheduler.flush();
+    snapshot = {
+      ...snapshot,
+      record: (await session.renameProject('tree', 'other'))!,
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // First save under the new name.
+    scheduler.schedule();
+    await scheduler.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Rename back to the original name.
+    await scheduler.flush();
+    snapshot = {
+      ...snapshot,
+      record: (await session.renameProject('other', 'tree'))!,
+    };
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Save again under the original name - this is where a stale claim
+    // keyed by name used to collide with the record the rename just wrote.
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(conflicts).toEqual([]);
+    expect((await session.getProject('tree'))!.name).toBe('tree');
+  });
+
+  // ---- Residual review, N1: the latch could only be retired by touching a
+  // DIFFERENT project (clearStaleConflict), or by reloading the tab. Both
+  // tests below re-open the contested name itself, which is the one case that
+  // used to be impossible to recover from.
+
+  // Straight back, with no detour through another project - the ordinary way
+  // out of the banner, since the banner names the project and the Workspace
+  // modal lists it. openProjectByName has just re-read the winning tab's
+  // record and loaded it into the app, so this tab is now working from their
+  // data; refusing to save it is refusing to save work that is no longer
+  // stale. The tab used to stay blocked for the rest of its life.
+  it('resumes saving when the contested project is re-opened, with no detour through another project', async () => {
+    const conflicts: string[] = [];
+    const { scheduler, reported } = make({
+      onConflict: (name) => conflicts.push(name),
+    });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched on 'tree'
+    expect(reported).toContain('error:conflict');
+
+    // Exactly what openProjectByName does: re-read the stored record (theirs),
+    // load it, and re-stake the claim from it.
+    const reloaded = (await session.getProject('tree'))!;
+    snapshot = { record: reloaded, sourceBytes: GED };
+    scheduler.noteOpened('tree', reloaded.updatedAt);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(reported[reported.length - 1]).toBe('saved');
+    expect(conflicts).toEqual(['tree']); // no second, spurious conflict
+    // Our write landed on top of their record - which is what we loaded.
+    expect((await session.getProject('tree'))!.updatedAt).not.toBe(
+      '2099-01-01T00:00:00.000Z',
+    );
+
+    // ...and clearing the latch has not disarmed detection: the next write by
+    // the other tab is still caught rather than overwritten.
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-06-01T00:00:00.000Z',
+      focalPersonId: 'OTHER-TAB-AGAIN',
+    });
+    scheduler.schedule();
+    await scheduler.flush();
+    expect(conflicts).toEqual(['tree', 'tree']);
+    expect((await session.getProject('tree'))!.focalPersonId).toBe('OTHER-TAB-AGAIN');
+  });
+
+  // The damaging half of N1: the latch outlived the record it was about. After
+  // the user deletes the contested project and imports a GEDCOM that takes the
+  // now-free name, the new project is a different tree that no other tab has
+  // ever seen - and it was never written to either backend, behind a banner
+  // claiming it was open in another tab that had saved since. Both false.
+  it('saves a brand-new project that takes the name of a deleted, contested one', async () => {
+    const { scheduler, reported, folders } = make({ onConflict: () => {} });
+
+    scheduler.schedule();
+    await scheduler.flush();
+    await session.putProject({
+      ...(await session.getProject('tree'))!,
+      updatedAt: '2099-01-01T00:00:00.000Z',
+    });
+    scheduler.schedule();
+    await scheduler.flush(); // latched on 'tree'
+    expect(reported).toContain('error:conflict');
+
+    // The user deletes it in both backends, as deleteProjectByName does...
+    await session.deleteProject('tree');
+    await workspace.deleteProject('tree');
+
+    // ...then imports a different file that is assigned the freed name.
+    snapshot = {
+      record: makeRecord({ name: 'tree', sourceHash: 'h2' }),
+      sourceBytes: GED,
+    };
+    scheduler.noteOpened('tree', null);
+    scheduler.schedule();
+    await scheduler.flush();
+
+    expect(reported[reported.length - 1]).toBe('saved');
+    expect((await session.getProject('tree'))!.sourceHash).toBe('h2');
+    expect(await session.getLastProject()).toBe('tree');
+    // The folder mirror, which the latch also stops, resumed too.
+    expect(folders[folders.length - 1]).toBe('connected');
+    expect((await workspace.openProject('tree'))!.project.sourceHash).toBe('h2');
+  });
+});
