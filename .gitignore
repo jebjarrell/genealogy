@@ -10,3 +10,7 @@ coverage/
 
 # Local workspace: your GEDCOM projects and document vault. Personal data.
 Workspace/
+
+# Exported/working GEDCOMs at the repo root. Personal data.
+# Scoped to the root so test fixtures under packages/*/tests/ stay trackable.
+/*.ged
