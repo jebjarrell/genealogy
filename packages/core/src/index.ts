@@ -132,7 +132,11 @@ export type {
 
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';
-export { findParentChildFamily, coParentsOf } from './graph/family-link.js';
+export {
+  findParentChildFamily,
+  coParentsOf,
+  findSpouseFamily,
+} from './graph/family-link.js';
 export {
   candidateFamiliesForChild,
   candidateFamiliesForParent,

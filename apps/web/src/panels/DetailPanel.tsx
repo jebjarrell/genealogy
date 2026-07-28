@@ -1,12 +1,10 @@
-import { useState } from 'react';
 import {
-  coParentsOf,
   describeRelationship,
-  findParentChildFamily,
   personSketch,
   militaryServiceRecords,
 } from '@genealogy/core';
 import { useStore } from '../state/store.js';
+import { RelationshipList } from './RelationshipList.js';
 import { useEditorStore } from '../state/editorStore.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
@@ -31,158 +29,6 @@ const EVENT_LABELS: Record<string, string> = {
   occupation: 'Occupation',
   other: 'Event',
 };
-
-/**
- * Which side of a parent-child link this list shows, so a row knows both ends of
- * the link it would sever. Omitted for lists (spouses) that cannot be detached.
- */
-type Detach =
-  | { direction: 'parent'; childId: string }
-  | { direction: 'child'; parentId: string };
-
-function RelationshipList({
-  title,
-  ids,
-  detach,
-}: {
-  title: string;
-  ids: string[];
-  detach?: Detach;
-}) {
-  const model = useStore((s) => s.model);
-  const graph = useStore((s) => s.graph);
-  const focalPersonId = useStore((s) => s.focalPersonId);
-  const selectPerson = useStore((s) => s.selectPerson);
-  const unlinkRelationship = useStore((s) => s.unlinkRelationship);
-  // Only one row is armed at a time, so a stray click cannot confirm a
-  // different row than the one the user was looking at.
-  const [armed, setArmed] = useState<string | null>(null);
-  if (!model || ids.length === 0) return null;
-  return (
-    <div className="mt-2">
-      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-        {title}
-      </div>
-      <ul className="mt-1 space-y-0.5">
-        {ids.map((id) => {
-          const person = model.persons.get(id);
-          if (!person) return null;
-          const rel =
-            graph && focalPersonId && focalPersonId !== id
-              ? describeRelationship(graph, model, focalPersonId, id)
-              : null;
-          // Resolve both ends of the link this row represents, then the FAM that
-          // carries it. GEDCOM has no direct parent-child record to remove.
-          const parentId = detach?.direction === 'parent' ? id : detach?.parentId;
-          const childId = detach?.direction === 'child' ? id : detach?.childId;
-          const familyId =
-            graph && parentId && childId
-              ? findParentChildFamily(graph, parentId, childId)
-              : null;
-          // Detaching a child removes the whole couple, so name the others.
-          const alsoRemoved =
-            familyId && parentId
-              ? coParentsOf(model, familyId, parentId)
-                  .map((pid) => model.persons.get(pid))
-                  .filter((p): p is NonNullable<typeof p> => p !== undefined)
-                  .map(primaryName)
-              : [];
-
-          return (
-            <li key={id} className="flex items-baseline justify-between gap-2">
-              <span className="min-w-0">
-                <button
-                  className="text-left text-sm text-blue-700 hover:underline"
-                  onClick={() => selectPerson(id)}
-                >
-                  {primaryName(person)}
-                </button>
-                {rel && <span className="ml-1 text-xs text-gray-400">({rel})</span>}
-              </span>
-              {familyId && (
-                <span className="shrink-0">
-                  {armed === id ? (
-                    <span className="flex items-center gap-1">
-                      <button
-                        className="rounded bg-red-600 px-1.5 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700"
-                        title={
-                          alsoRemoved.length > 0
-                            ? `Also removes ${alsoRemoved.join(' and ')}, recorded as one couple`
-                            : undefined
-                        }
-                        onClick={() => {
-                          unlinkRelationship(familyId, 'parent-child', { childId });
-                          setArmed(null);
-                        }}
-                      >
-                        Remove
-                      </button>
-                      <button
-                        className="rounded border border-gray-300 px-1.5 py-0.5 text-[11px] hover:bg-gray-50"
-                        onClick={() => setArmed(null)}
-                      >
-                        Cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      className="rounded border border-gray-200 px-1.5 py-0.5 text-[11px] text-gray-500 hover:border-red-300 hover:text-red-600"
-                      title={`Remove this ${detach?.direction === 'parent' ? 'parent' : 'child'} link`}
-                      onClick={() => setArmed(id)}
-                    >
-                      Remove…
-                    </button>
-                  )}
-                </span>
-              )}
-            </li>
-          );
-        })}
-        {armed !== null &&
-          (() => {
-            // The consequence is stated once, below the list, where there is room
-            // for a full sentence rather than a tooltip.
-            const armedParentId =
-              detach?.direction === 'parent' ? armed : detach?.parentId;
-            const armedChildId =
-              detach?.direction === 'child' ? armed : detach?.childId;
-            const famId =
-              graph && armedParentId && armedChildId
-                ? findParentChildFamily(graph, armedParentId, armedChildId)
-                : null;
-            const others =
-              famId && armedParentId
-                ? coParentsOf(model, famId, armedParentId)
-                    .map((pid) => model.persons.get(pid))
-                    .filter((p): p is NonNullable<typeof p> => p !== undefined)
-                    .map(primaryName)
-                : [];
-            const parentName = armedParentId
-              ? (model.persons.get(armedParentId)?.names[0]?.full ?? armedParentId)
-              : '';
-            const childName = armedChildId
-              ? (model.persons.get(armedChildId)?.names[0]?.full ?? armedChildId)
-              : '';
-            return (
-              <li className="mt-1 rounded bg-amber-50 p-2 text-[11px] leading-snug text-amber-900">
-                Remove <span className="font-semibold">{parentName}</span> as a parent
-                of <span className="font-semibold">{childName}</span>?
-                {others.length > 0 && (
-                  <>
-                    {' '}
-                    This also removes{' '}
-                    <span className="font-semibold">{others.join(' and ')}</span>,
-                    because GEDCOM records them as one couple.
-                  </>
-                )}{' '}
-                You can undo it from the Review tab.
-              </li>
-            );
-          })()}
-      </ul>
-    </div>
-  );
-}
 
 // FamilySearch-style bio sketch shown at the top of the profile. The full event,
 // relationship, and source lists remain below it (owner's choice).
@@ -335,7 +181,7 @@ export function DetailPanel() {
   const setFocal = useStore((s) => s.setFocal);
   const expand = useStore((s) => s.expand);
   const openEditPerson = useEditorStore((s) => s.openEditPerson);
-  const openAddPerson = useEditorStore((s) => s.openAddPerson);
+  const openAttach = useEditorStore((s) => s.openAttach);
   const openAddEvent = useEditorStore((s) => s.openAddEvent);
   const openEditEvent = useEditorStore((s) => s.openEditEvent);
 
@@ -422,19 +268,19 @@ export function DetailPanel() {
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'parent', personId: person.id })}
+          onClick={() => openAttach('parent', person.id)}
         >
           + Parent
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'child', personId: person.id })}
+          onClick={() => openAttach('child', person.id)}
         >
           + Child
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'spouse', personId: person.id })}
+          onClick={() => openAttach('spouse', person.id)}
         >
           + Spouse
         </button>
@@ -488,7 +334,11 @@ export function DetailPanel() {
         ids={parents}
         detach={{ direction: 'parent', childId: person.id }}
       />
-      <RelationshipList title="Spouses" ids={spouses} />
+      <RelationshipList
+        title="Spouses"
+        ids={spouses}
+        detach={{ direction: 'spouse', personId: person.id }}
+      />
       <RelationshipList
         title="Children"
         ids={children}

@@ -38,3 +38,26 @@ export function coParentsOf(
   if (!family) return [];
   return family.spouseIds.filter((id) => id !== parentId && model.persons.has(id));
 }
+
+/**
+ * The id of the family recording a marriage between `aId` and `bId`, or null
+ * when they are not recorded as spouses. Spouse edges are stored once in a
+ * stable order rather than in both directions, so both orders are checked.
+ */
+export function findSpouseFamily(
+  graph: Graph,
+  aId: string,
+  bId: string,
+): string | null {
+  if (aId === bId) return null;
+  for (const edge of graph.edges) {
+    if (edge.type !== 'spouseOf') continue;
+    if (
+      (edge.from === aId && edge.to === bId) ||
+      (edge.from === bId && edge.to === aId)
+    ) {
+      return edge.familyId;
+    }
+  }
+  return null;
+}

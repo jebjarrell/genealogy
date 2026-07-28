@@ -169,11 +169,44 @@ describe('DetailPanel — removing a parent-child link', () => {
     ]);
   });
 
-  it('offers no remove control on spouses', () => {
+  it('warns that removing a spouse also detaches them from the children', async () => {
+    const user = userEvent.setup();
+    useStore.getState().selectPerson('I1'); // Thomas, married to Mary, child James
+    render(<DetailPanel />);
+
+    const row = within(section('Spouses'))
+      .getByText('Mary Stone')
+      .closest('li') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: /Remove…/ }));
+
+    const banner = screen.getByText(
+      (_c, el) => el?.tagName === 'P' && /as a spouse of/.test(el.textContent ?? ''),
+    );
+    expect(banner).toHaveTextContent('Remove Mary Stone as a spouse of Thomas L Stone');
+    expect(banner).toHaveTextContent('stop being recorded as a parent of their child');
+  });
+
+  it('removes a spouse while leaving the children with the other parent', async () => {
+    const user = userEvent.setup();
     useStore.getState().selectPerson('I1');
     render(<DetailPanel />);
-    const spouses = within(section('Spouses'));
-    expect(spouses.queryByRole('button', { name: /Remove/ })).toBeNull();
+
+    const row = within(section('Spouses'))
+      .getByText('Mary Stone')
+      .closest('li') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: /Remove…/ }));
+    await user.click(screen.getByRole('button', { name: /^Remove$/ }));
+
+    const state = useStore.getState();
+    expect(state.model!.families.get('F1')!.spouseIds).toEqual(['I1']);
+    // James keeps Thomas, and is not orphaned by the spouse removal.
+    expect(state.graph!.parentsOf.get('I5')!.sort()).toEqual(['I1', 'I3', 'I4']);
+    expect(state.ops[0]).toMatchObject({
+      kind: 'unlinkRelationship',
+      relation: 'spouse',
+      familyId: 'F1',
+      spouseAId: 'I2',
+    });
   });
 
   it('removes a child from the parent side too', async () => {
