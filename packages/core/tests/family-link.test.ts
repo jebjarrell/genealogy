@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { parseGedcom } from '../src/gedcom/parse.js';
 import { buildGraph } from '../src/graph/build.js';
 import { applyOps } from '../src/edit/ops.js';
-import { coParentsOf, findParentChildFamily } from '../src/graph/family-link.js';
+import {
+  coParentsOf,
+  findParentChildFamily,
+  findSpouseFamily,
+} from '../src/graph/family-link.js';
 
 // The situation this exists for: a GEDCOM where someone was attached a
 // generation too high, so a child ends up listed under two different couples.
@@ -144,5 +148,21 @@ describe('detaching a child from one of two families', () => {
 
   it('leaves the base model untouched', () => {
     expect(base.families.get('F2')!.childIds).toContain('I5');
+  });
+});
+
+describe('findSpouseFamily', () => {
+  const graph = buildGraph(parseGedcom(TWO_FATHERS));
+
+  it('finds the family recording a marriage, in either argument order', () => {
+    expect(findSpouseFamily(graph, 'I1', 'I2')).toBe('F1');
+    expect(findSpouseFamily(graph, 'I2', 'I1')).toBe('F1');
+    expect(findSpouseFamily(graph, 'I3', 'I4')).toBe('F2');
+  });
+
+  it('returns null when the two are not recorded as spouses', () => {
+    expect(findSpouseFamily(graph, 'I1', 'I4')).toBeNull();
+    expect(findSpouseFamily(graph, 'I1', 'NOPE')).toBeNull();
+    expect(findSpouseFamily(graph, 'I1', 'I1')).toBeNull();
   });
 });

@@ -16,6 +16,7 @@ import { MergeConfirm } from './panels/MergeConfirm.js';
 import { SarPanel } from './panels/SarPanel.js';
 import { VaultPanel } from './panels/VaultPanel.js';
 import { PersonEditor } from './panels/PersonEditor.js';
+import { AttachPersonModal } from './panels/AttachPersonModal.js';
 import { EventEditor } from './panels/EventEditor.js';
 import { WorkspaceModal } from './panels/WorkspaceModal.js';
 
@@ -411,6 +412,7 @@ export function App() {
       <FocalPicker />
       <MergeConfirm />
       <PersonEditor />
+      <AttachPersonModal />
       <EventEditor />
       {workspaceOpen && <WorkspaceModal onClose={() => setWorkspaceOpen(false)} />}
     </div>

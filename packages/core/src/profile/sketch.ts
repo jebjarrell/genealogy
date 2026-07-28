@@ -1,5 +1,6 @@
 import type { Event, GenealogyModel, Graph, Person, Sex } from '../types/index.js';
 import { militaryServiceOf } from '../military/wars.js';
+import { firstEvent } from '../model/person-events.js';
 
 // A compact, FamilySearch-style summary of a person for the profile header.
 // Pure: derived from the model + graph, no rendering concerns. The detail panel
@@ -34,18 +35,6 @@ export interface PersonSketch {
 function primaryName(person: Person): string {
   const n = person.names[0];
   return (n?.full || n?.raw || '(unnamed)').trim();
-}
-
-function firstEvent(
-  person: Person,
-  model: GenealogyModel,
-  type: Event['type'],
-): Event | undefined {
-  for (const id of person.eventIds) {
-    const e = model.events.get(id);
-    if (e?.type === type) return e;
-  }
-  return undefined;
 }
 
 function sketchEvent(event: Event | undefined): SketchEvent | undefined {

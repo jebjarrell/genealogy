@@ -118,11 +118,7 @@ export type { ExportedModelJson } from './export/json.js';
 
 // ---- Profile bio sketch -------------------------------------------------
 export { personSketch } from './profile/sketch.js';
-export type {
-  PersonSketch,
-  SketchEvent,
-  SketchSpouse,
-} from './profile/sketch.js';
+export type { PersonSketch, SketchEvent, SketchSpouse } from './profile/sketch.js';
 
 // ---- Family analytics ---------------------------------------------------
 export { computeFamilyStats } from './analytics/family-stats.js';
@@ -136,4 +132,17 @@ export type {
 
 // ---- Place resolution seam (TRD §8.1) ----------------------------------
 export type { PlaceResolver } from './geo/index.js';
-export { findParentChildFamily, coParentsOf } from './graph/family-link.js';
+export {
+  findParentChildFamily,
+  coParentsOf,
+  findSpouseFamily,
+} from './graph/family-link.js';
+export {
+  candidateFamiliesForChild,
+  candidateFamiliesForParent,
+  candidateFamiliesForSpouse,
+} from './edit/link-targets.js';
+export type { FamilyCandidate } from './edit/link-targets.js';
+export { checkParentChildLink, checkSpouseLink } from './edit/link-validation.js';
+export type { LinkIssue, LinkSeverity } from './edit/link-validation.js';
+export { firstEvent, eventYear } from './model/person-events.js';
