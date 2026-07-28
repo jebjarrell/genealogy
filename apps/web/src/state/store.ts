@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import {
   applyOps,
   buildGraph,
+  checkParentChildLink,
+  checkSpouseLink,
   detectPedigreeCollapse,
   enumerateRelationshipPaths,
   getEgoNetwork,
@@ -272,6 +274,11 @@ export interface AppState extends InternalState {
       description?: string | null;
     },
   ) => void;
+  /**
+   * Link two people. Pass `familyId` to join an existing family (see
+   * candidateFamiliesFor* in core); omit it to create a new one. Refuses links
+   * that core reports as blocking, so no caller can bypass the check.
+   */
   linkRelationship: (
     relation: 'parent-child' | 'spouse',
     ids: {
@@ -280,6 +287,7 @@ export interface AppState extends InternalState {
       spouseAId?: string;
       spouseBId?: string;
     },
+    familyId?: string,
   ) => void;
   unlinkRelationship: (
     familyId: string,
@@ -741,14 +749,33 @@ export const useStore = create<AppState>((set, get) => {
       applyOpLog([...ops, op], [], { notice: 'Event updated.' });
     },
 
-    linkRelationship: (relation, ids) => {
-      const { model, ops } = get();
+    linkRelationship: (relation, ids, familyId) => {
+      const { model, graph, ops } = get();
       if (!model) return;
-      const familyId = nextId(model.families.keys(), 'FU');
+
+      // Enforced here rather than only in the modal, so every caller - including
+      // the create-and-attach flow - is covered.
+      if (graph) {
+        const issues =
+          relation === 'parent-child'
+            ? ids.parentId && ids.childId
+              ? checkParentChildLink(model, graph, ids.parentId, ids.childId)
+              : []
+            : ids.spouseAId && ids.spouseBId
+              ? checkSpouseLink(model, graph, ids.spouseAId, ids.spouseBId)
+              : [];
+        const blocking = issues.find((i) => i.severity === 'block');
+        if (blocking) {
+          set({ notice: blocking.message });
+          return;
+        }
+      }
+
+      const targetFamily = familyId ?? nextId(model.families.keys(), 'FU');
       const op: EditOp = {
         kind: 'linkRelationship',
         relation,
-        familyId,
+        familyId: targetFamily,
         at: new Date().toISOString(),
         ...ids,
       };
