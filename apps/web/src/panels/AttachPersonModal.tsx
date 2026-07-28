@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   candidateFamiliesForChild,
   candidateFamiliesForParent,
+  candidateFamiliesForSpouse,
   checkParentChildLink,
   checkSpouseLink,
   type FamilyCandidate,
@@ -59,13 +60,17 @@ export function AttachPersonModal() {
     return p ? primaryName(p) : id;
   };
 
-  // Candidate families depend on which end the new person joins: a new PARENT
-  // joins a family the anchor is a child in; a new child or spouse joins one the
-  // anchor is a spouse in.
+  // Candidate families depend on which end the new person joins. A new PARENT
+  // joins a family the anchor is a child in; a new CHILD joins one the anchor is
+  // a spouse in; a new SPOUSE only ever joins a family that has room for one -
+  // adding a third person to a completed marriage would invent a polygamous
+  // couple and silently make them a parent of its children.
   const candidates: FamilyCandidate[] =
     attach.relation === 'parent'
       ? candidateFamiliesForParent(model, attach.personId)
-      : candidateFamiliesForChild(model, attach.personId);
+      : attach.relation === 'child'
+        ? candidateFamiliesForChild(model, attach.personId)
+        : candidateFamiliesForSpouse(model, attach.personId);
 
   const issuesFor = (otherId: string): LinkIssue[] => {
     if (attach.relation === 'spouse') {
@@ -110,6 +115,17 @@ export function AttachPersonModal() {
     const mustChoose = blocking.length === 0 && candidates.length > 1;
     const chosen = mustChoose ? familyChoice : (candidates[0]?.familyId ?? NEW_FAMILY);
 
+    const joining =
+      chosen && chosen !== NEW_FAMILY
+        ? (candidates.find((c) => c.familyId === chosen) ?? null)
+        : null;
+    const alsoNames = joining
+      ? joining.spouseIds.filter((id) => id !== attach.personId).map(nameOf)
+      : [];
+    const otherChildren = joining
+      ? joining.childIds.filter((id) => id !== pickedId).length
+      : 0;
+
     return (
       <Shell heading={heading} onClose={close}>
         <p className="text-sm">
@@ -117,6 +133,33 @@ export function AttachPersonModal() {
           {RELATION_LABEL[attach.relation]}{' '}
           <span className="font-semibold">{primaryName(anchor)}</span>
         </p>
+
+        {blocking.length === 0 &&
+          joining &&
+          (alsoNames.length > 0 || otherChildren > 0) && (
+            <p className="rounded bg-gray-50 p-2 text-xs text-gray-700">
+              Joining this family also records{' '}
+              <span className="font-semibold">{nameOf(pickedId)}</span> as
+              {alsoNames.length > 0 && (
+                <>
+                  {' '}
+                  a spouse of{' '}
+                  <span className="font-semibold">{alsoNames.join(' and ')}</span>
+                </>
+              )}
+              {alsoNames.length > 0 && otherChildren > 0 && ' and'}
+              {otherChildren > 0 && (
+                <>
+                  {' '}
+                  a parent of its{' '}
+                  {otherChildren === 1
+                    ? 'other child'
+                    : `${otherChildren} other children`}
+                </>
+              )}
+              , because GEDCOM stores a couple and their children as one family.
+            </p>
+          )}
 
         {blocking.length > 0 && (
           <div className="rounded bg-red-50 p-2 text-xs text-red-800">
@@ -240,8 +283,9 @@ export function AttachPersonModal() {
       <button
         className="rounded border border-dashed border-gray-300 px-3 py-1.5 text-left text-sm text-gray-700 hover:border-blue-400 hover:text-blue-700"
         onClick={() => {
-          closeAttach();
-          openAddPerson({ relation: attach.relation, personId: attach.personId });
+          const { relation, personId } = attach;
+          close();
+          openAddPerson({ relation, personId });
         }}
       >
         + Create a new person{query.trim() ? ` “${query.trim()}”` : ''}

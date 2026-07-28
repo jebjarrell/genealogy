@@ -47,7 +47,14 @@ a fresh couple. That is how a child ends up with two separate parent families.
 - Fixing `Person.familyIdAsChild` being singular. When a child joins a second
   family `applyLink` overwrites it. Parent lists render correctly because they
   derive from families' `childIds`, but a GEDCOM export will show one `FAMC`
-  where the UI showed two. Pre-existing; out of scope.
+  where the UI showed two.
+
+  **Correction (post-review):** this was originally justified as pre-existing.
+  That was wrong. Before this branch the only route into `applyLink`'s child
+  path was create-and-attach, and a freshly created person has no `FAMC` to
+  overwrite - so this branch is what makes the overwrite reachable. Fixing the
+  field is still out of scope, but the overwrite is no longer silent:
+  `checkParentChildLink` raises a warning naming the parents already recorded.
 - Divorce (`DIV`) or any other family-level event. Removing a spouse link
   records that the link is not there, not why.
 - Merging duplicate people. That already exists separately.
@@ -144,9 +151,13 @@ no way to proceed; warnings are shown with an explicit override.
 the most complex thing in a 440-line file and is about to gain a third detach
 direction. Splitting it now keeps both files focused.
 
-Spouse rows gain a remove control. Its confirmation differs from parent-child:
-removing a spouse link does not affect children, and the copy says so rather
-than reusing the couple warning.
+Spouse rows gain a remove control. Its confirmation differs from parent-child.
+
+**Correction (post-review):** this section originally said "removing a spouse
+link does not affect children". That is false. `applyUnlink` leaves `childIds`
+alone, but the removed spouse is stripped from `spouseIds`, and parent edges are
+derived from `spouseIds` - so they stop being a parent of that family's children.
+The implementation states the real consequence and counts the children.
 
 ## Testing
 

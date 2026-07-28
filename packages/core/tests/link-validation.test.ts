@@ -71,17 +71,18 @@ describe('checkParentChildLink — blocking', () => {
 
 describe('checkParentChildLink — warnings', () => {
   it('warns when the parent was born after the child', () => {
-    // Elizabeth b.1855 cannot be the parent of Mary b.1845.
+    // Elizabeth b.1855 cannot be the parent of Mary b.1845. Mary also already
+    // has parents, so that warning rides along - assert on this rule only.
     const issues = warns(checkParentChildLink(m, g, 'I6', 'I4'));
-    expect(issues).toHaveLength(1);
-    expect(issues[0]!.message).toMatch(/born .* after/i);
+    expect(issues.filter((i) => /born .* after/i.test(i.message))).toHaveLength(1);
   });
 
   it('warns when the parent was implausibly young, without double-reporting', () => {
-    // Mary b.1845 would have been 10 at Elizabeth's birth in 1855.
+    // Mary b.1845 would have been 10 at Elizabeth's birth in 1855. The
+    // born-after rule must NOT also fire - that is the double-report this pins.
     const issues = warns(checkParentChildLink(m, g, 'I4', 'I6'));
-    expect(issues).toHaveLength(1);
-    expect(issues[0]!.message).toMatch(/would have been 10/i);
+    expect(issues.filter((i) => /would have been 10/i.test(i.message))).toHaveLength(1);
+    expect(issues.filter((i) => /born .* after/i.test(i.message))).toEqual([]);
   });
 
   it('warns when the child was born well after the parent died', () => {
@@ -96,8 +97,23 @@ describe('checkParentChildLink — warnings', () => {
   });
 
   it('raises nothing on a plausible link', () => {
-    // Anne b.1830 as a parent of Edward b.1848: she was 18, no existing link.
-    expect(checkParentChildLink(m, g, 'I3', 'I5')).toEqual([]);
+    // Isolated so no other rule can fire: an adult parent, a child with no
+    // recorded parents, and no existing link between them.
+    const PLAUSIBLE = `0 HEAD
+0 @I1@ INDI
+1 NAME Adult /Parent/
+1 BIRT
+2 DATE 1820
+0 @I2@ INDI
+1 NAME Unattached /Child/
+1 BIRT
+2 DATE 1850
+0 TRLR
+`;
+    const plausible = parseGedcom(PLAUSIBLE);
+    expect(checkParentChildLink(plausible, buildGraph(plausible), 'I1', 'I2')).toEqual(
+      [],
+    );
   });
 
   it('raises no date issue when a date is unknown', () => {
@@ -140,5 +156,39 @@ describe('checkSpouseLink', () => {
 
   it('raises nothing for an unrelated pair', () => {
     expect(checkSpouseLink(m, g, 'I3', 'I5')).toEqual([]);
+  });
+});
+
+describe('checkParentChildLink — existing parentage', () => {
+  it('warns when the child already has different parents recorded', () => {
+    // Person.familyIdAsChild is singular, so linking Elizabeth as a child of
+    // someone else rewrites which family a GEDCOM export names as her
+    // parentage. The UI still shows every parent, so nothing looks wrong -
+    // which is exactly why this has to be said out loud.
+    const issues = warns(checkParentChildLink(m, g, 'I3', 'I4'));
+    expect(issues.some((i) => /already has recorded parents/i.test(i.message))).toBe(
+      true,
+    );
+  });
+
+  it('does not warn when the child has no parents yet', () => {
+    const ORPHAN = `0 HEAD
+0 @I1@ INDI
+1 NAME Some /Parent/
+0 @I2@ INDI
+1 NAME No /Parents/
+0 TRLR
+`;
+    const orphan = parseGedcom(ORPHAN);
+    expect(checkParentChildLink(orphan, buildGraph(orphan), 'I1', 'I2')).toEqual([]);
+  });
+
+  it('does not raise it for a parent already in the same family', () => {
+    // Henry is already Mary's parent; that is the "already recorded" warning,
+    // not a claim that her parentage is about to move.
+    const issues = warns(checkParentChildLink(m, g, 'I1', 'I4'));
+    expect(issues.some((i) => /already has recorded parents/i.test(i.message))).toBe(
+      false,
+    );
   });
 });

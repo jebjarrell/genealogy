@@ -59,3 +59,24 @@ export function candidateFamiliesForParent(
   }
   return out;
 }
+
+/**
+ * Families a new SPOUSE of `personId` could join.
+ *
+ * Deliberately narrower than the other two: a family that already records two
+ * spouses is a completed marriage, and adding a third person to it would both
+ * invent a polygamous couple and silently record the newcomer as a parent of
+ * that marriage's children. A remarriage belongs in a new family instead.
+ *
+ * The one case worth joining is a family holding a single parent and their
+ * children - the missing spouse genuinely belongs there, and joining is what
+ * makes them a parent of those children.
+ */
+export function candidateFamiliesForSpouse(
+  model: GenealogyModel,
+  personId: string,
+): FamilyCandidate[] {
+  return candidateFamiliesForChild(model, personId).filter(
+    (c) => c.spouseIds.length < 2,
+  );
+}

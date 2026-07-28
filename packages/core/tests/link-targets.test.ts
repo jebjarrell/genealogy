@@ -5,6 +5,7 @@ import { parseGedcom } from '../src/gedcom/parse.js';
 import {
   candidateFamiliesForChild,
   candidateFamiliesForParent,
+  candidateFamiliesForSpouse,
 } from '../src/edit/link-targets.js';
 
 function model(name: string) {
@@ -92,5 +93,40 @@ describe('candidate families derive from the family records, not the person poin
       'F1',
       'F2',
     ]);
+  });
+});
+
+describe('candidateFamiliesForSpouse — where could a new spouse go?', () => {
+  it('never offers a marriage that already has two spouses', () => {
+    // Adding a spouse to Henry's existing marriage would make a three-spouse
+    // family and silently record the newcomer as a parent of its children.
+    expect(candidateFamiliesForSpouse(m, 'I1')).toEqual([]);
+    expect(candidateFamiliesForSpouse(m, 'I2')).toEqual([]);
+  });
+
+  it('offers a family that records only one spouse so far', () => {
+    // A FAM with a father and children but no mother yet: adding her belongs
+    // in that family, not a new one.
+    const LONE_PARENT = `0 HEAD
+0 @I1@ INDI
+1 NAME Widower /Alone/
+0 @I2@ INDI
+1 NAME Missing /Wife/
+0 @I3@ INDI
+1 NAME Their /Child/
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I3@
+0 TRLR
+`;
+    const lone = parseGedcom(LONE_PARENT);
+    const candidates = candidateFamiliesForSpouse(lone, 'I1');
+    expect(candidates.map((c) => c.familyId)).toEqual(['F1']);
+    expect(candidates[0]!.childIds).toEqual(['I3']);
+  });
+
+  it('offers nothing for someone in no family at all', () => {
+    expect(candidateFamiliesForSpouse(m, 'I4')).toEqual([]);
   });
 });

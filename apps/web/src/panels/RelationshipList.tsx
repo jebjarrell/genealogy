@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   coParentsOf,
   describeRelationship,
@@ -52,6 +52,17 @@ export function RelationshipList({
   // One row armed at a time, so a stray click cannot confirm a different row
   // than the one the user was reading.
   const [armed, setArmed] = useState<string | null>(null);
+
+  // Selecting a different person swaps the list out from under an armed row.
+  // Without this the confirmation stays open, retargeted at whoever is now in
+  // that position - a live Remove button describing something the user never
+  // armed. Keyed on content rather than the array identity, which changes every
+  // render.
+  const subject = detach
+    ? `${detach.direction}:${'childId' in detach ? detach.childId : 'parentId' in detach ? detach.parentId : detach.personId}`
+    : '';
+  const rowKey = `${subject}|${ids.join(',')}`;
+  useEffect(() => setArmed(null), [rowKey]);
 
   if (!model || ids.length === 0) return null;
 

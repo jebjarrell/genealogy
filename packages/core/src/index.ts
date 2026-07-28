@@ -140,6 +140,7 @@ export {
 export {
   candidateFamiliesForChild,
   candidateFamiliesForParent,
+  candidateFamiliesForSpouse,
 } from './edit/link-targets.js';
 export type { FamilyCandidate } from './edit/link-targets.js';
 export { checkParentChildLink, checkSpouseLink } from './edit/link-validation.js';

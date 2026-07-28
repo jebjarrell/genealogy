@@ -71,10 +71,22 @@ export function checkParentChildLink(
     ];
   }
 
-  if ((graph.parentsOf.get(childId) ?? []).includes(parentId)) {
+  const existingParents = graph.parentsOf.get(childId) ?? [];
+  if (existingParents.includes(parentId)) {
     issues.push({
       severity: 'warn',
       message: `${parent} is already recorded as a parent of ${child}.`,
+    });
+  } else if (existingParents.length > 0) {
+    // Person.familyIdAsChild is singular, so applyLink repoints it at the new
+    // family. Every parent still renders in the UI, but a GEDCOM export will
+    // name only this family as the child's parentage - a silent loss unless
+    // it is said here.
+    issues.push({
+      severity: 'warn',
+      message: `${child} already has recorded parents (${existingParents
+        .map((id) => nameOf(model, id))
+        .join(' and ')}). This family will be the one exported as their parentage.`,
     });
   }
 

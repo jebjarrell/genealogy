@@ -183,6 +183,73 @@ describe('AttachPersonModal', () => {
     });
   });
 
+  it('never adds a spouse to a marriage that already has two', async () => {
+    const user = userEvent.setup();
+    // Henry is already married to Catherine in F1. Adding Anne must create a
+    // NEW family - joining F1 would invent a three-spouse couple and silently
+    // make Anne a parent of Mary.
+    useEditorStore.getState().openAttach('spouse', 'I1');
+    render(<AttachPersonModal />);
+
+    await searchAndPick(user, 'Catherine');
+    await user.click(screen.getByRole('button', { name: /^Link$/ }));
+
+    const model = useStore.getState().model!;
+    expect(model.families.get('F1')!.spouseIds.sort()).toEqual(['I1', 'I2']);
+    expect(model.families.get('F2')!.spouseIds.sort()).toEqual(['I1', 'I3']);
+    expect(model.families.get('FU1')!.spouseIds.sort()).toEqual(['I1', 'I2']);
+    // Mary's parents are untouched.
+    expect(useStore.getState().graph!.parentsOf.get('I4')!.sort()).toEqual([
+      'I1',
+      'I2',
+    ]);
+  });
+
+  it('adds a spouse into a family that records only one parent', async () => {
+    const user = userEvent.setup();
+    const LONE = `0 HEAD
+0 @I1@ INDI
+1 NAME Widower /Alone/
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Missing /Wife/
+0 @I3@ INDI
+1 NAME Their /Child/
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I3@
+0 TRLR
+`;
+    useStore.setState(useStore.getInitialState(), true);
+    useStore.getState().loadModel(parseGedcom(LONE), 'lone.ged');
+    useStore.getState().setFocal('I1');
+    useEditorStore.getState().openAttach('spouse', 'I1');
+    render(<AttachPersonModal />);
+
+    await searchAndPick(user, 'Missing');
+    // The consequence of joining is stated, not silent.
+    expect(screen.getByText(/parent of its other child/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Link$/ }));
+
+    const model = useStore.getState().model!;
+    expect(model.families.get('F1')!.spouseIds.sort()).toEqual(['I1', 'I2']);
+    expect(model.families.has('FU1')).toBe(false);
+  });
+
+  it('warns that an existing child already has recorded parents', async () => {
+    const user = userEvent.setup();
+    // Elizabeth is Henry and Anne's daughter. Making her Catherine's child too
+    // repoints which family a GEDCOM export names as her parentage.
+    useEditorStore.getState().openAttach('child', 'I2');
+    render(<AttachPersonModal />);
+
+    await searchAndPick(user, 'Elizabeth');
+
+    expect(screen.getByText(/already has recorded parents/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Link$/ })).toBeEnabled();
+  });
+
   it('does not offer the anchor as a match for themselves', async () => {
     const user = userEvent.setup();
     useEditorStore.getState().openAttach('spouse', 'I1');
