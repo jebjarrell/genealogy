@@ -7,3 +7,6 @@ coverage/
 *.log
 .eslint-forbidden-probe.ts
 .vite/
+
+# Local workspace: your GEDCOM projects and document vault. Personal data.
+Workspace/
