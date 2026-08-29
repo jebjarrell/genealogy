@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { parseGedcom } from '@genealogy/core';
 import { useStore } from './store.js';
+import { MemSessionStore } from '../fs/memSessionStore.js';
 
 // A child (I1) with parents I2/I3 and a duplicate of the mother (I3DUP).
 const GED = `0 HEAD
@@ -25,6 +26,8 @@ const GED = `0 HEAD
 0 TRLR
 `;
 
+const bytes = (s: string) => new TextEncoder().encode(s);
+
 const load = (name = 'merge.ged') =>
   useStore.getState().loadModel(parseGedcom(GED), name);
 
@@ -36,6 +39,14 @@ describe('app store — merge edit layer', () => {
     } catch {
       /* ignore */
     }
+  });
+
+  // Flush before reset, not after: an armed autosave debounce must run against
+  // the state that armed it, or snapshotOf sees a reset store and no-ops,
+  // leaking a pending write into whichever test runs next. See restore.test.ts.
+  afterEach(async () => {
+    await useStore.getState().flushSaves();
+    useStore.setState(useStore.getInitialState(), true);
   });
 
   it('merges two records, shrinks the model, and records the op', () => {
@@ -50,33 +61,56 @@ describe('app store — merge edit layer', () => {
     expect(s.baseModel!.persons.has('I3DUP')).toBe(true); // pristine untouched
   });
 
-  it('persists the op-log and replays it on reload', () => {
-    load();
+  // localStorage's per-file `genealogy:ops:` key is gone (Task 10); op-log
+  // persistence now runs through a SessionStore, which loadModel (used by
+  // `load()` above) never touches - only importGedcom does. These two tests
+  // switch to importGedcom + a MemSessionStore so they keep proving a real
+  // round trip: the op lands in the store record, and a cold start (a fresh
+  // AppState, not just re-reading in-process fields) replays it.
+
+  it('persists the op-log and replays it on reload', async () => {
+    const session = new MemSessionStore();
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().importGedcom(bytes(GED), 'merge.ged');
     useStore.getState().setFocal('I1');
     useStore.getState().mergePeople('I3', 'I3DUP');
-    expect(localStorage.getItem('genealogy:ops:merge.ged')).toContain('I3DUP');
+    await useStore.getState().flushSaves();
 
-    // Reload the same file: the persisted op should replay.
-    load();
+    const record = await session.getProject('merge');
+    expect(record).not.toBeNull();
+    expect(record!.ops).toHaveLength(1);
+    expect(record!.ops[0]).toMatchObject({ kind: 'merge', mergeId: 'I3DUP' });
+
+    // Cold start: a fresh store, not just re-reading fields off the live one.
+    useStore.setState(useStore.getInitialState(), true);
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().restoreSession();
+
     const s = useStore.getState();
     expect(s.ops).toHaveLength(1);
     expect(s.model!.persons.has('I3DUP')).toBe(false);
   });
 
-  it('undo restores the merged-away record; redo re-applies it', () => {
-    load();
+  it('undo restores the merged-away record; redo re-applies it', async () => {
+    const session = new MemSessionStore();
+    useStore.getState().setSessionStore(session);
+    await useStore.getState().importGedcom(bytes(GED), 'merge.ged');
     useStore.getState().setFocal('I1');
     useStore.getState().mergePeople('I3', 'I3DUP');
     useStore.getState().undoMerge(0);
+    await useStore.getState().flushSaves();
+
     let s = useStore.getState();
     expect(s.ops).toHaveLength(0);
     expect(s.model!.persons.has('I3DUP')).toBe(true);
-    expect(localStorage.getItem('genealogy:ops:merge.ged')).toBe('[]');
+    expect((await session.getProject('merge'))!.ops).toEqual([]);
 
     useStore.getState().redo();
+    await useStore.getState().flushSaves();
     s = useStore.getState();
     expect(s.ops).toHaveLength(1);
     expect(s.model!.persons.has('I3DUP')).toBe(false);
+    expect((await session.getProject('merge'))!.ops).toHaveLength(1);
   });
 
   it('remaps the focal person when it is merged away', () => {

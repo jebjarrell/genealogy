@@ -11,17 +11,22 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
   const workspaceName = useStore((s) => s.workspaceName);
   const projects = useStore((s) => s.projects);
   const projectName = useStore((s) => s.projectName);
-  const fileName = useStore((s) => s.fileName);
-  const sourceBytes = useStore((s) => s.sourceBytes);
   const connectWorkspace = useStore((s) => s.connectWorkspace);
   const disconnectWorkspace = useStore((s) => s.disconnectWorkspace);
-  const saveAsProject = useStore((s) => s.saveAsProject);
   const openProjectByName = useStore((s) => s.openProjectByName);
   const renameCurrentProject = useStore((s) => s.renameCurrentProject);
   const deleteProjectByName = useStore((s) => s.deleteProjectByName);
+  const folderStatus = useStore((s) => s.folderStatus);
+  const reconnectWorkspace = useStore((s) => s.reconnectWorkspace);
 
-  const [newName, setNewName] = useState('');
   const [renameTo, setRenameTo] = useState('');
+  // Delete is irreversible and, for a browser-only project, acts on the only
+  // copy of the data in existence - years of manual work with no server and no
+  // backup - and its button sits 4px from Open. A two-step confirmation in the
+  // row itself (rather than window.confirm) keeps it testable and styled like
+  // the rest of the app. One name at a time: arming a second row disarms the
+  // first, and the armed row names what is about to be destroyed.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const supported = isFileSystemAccessSupported();
 
@@ -29,7 +34,9 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/30 p-4">
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-gray-200 p-3">
-          <h2 className="text-base font-bold text-gray-900">Workspace &amp; projects</h2>
+          <h2 className="text-base font-bold text-gray-900">
+            Workspace &amp; projects
+          </h2>
           <button className="text-gray-400 hover:text-gray-700" onClick={onClose}>
             ✕
           </button>
@@ -39,8 +46,8 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
           {!supported && (
             <p className="rounded bg-amber-50 p-2 text-xs text-amber-800">
               This browser doesn’t support the File System Access API. Your work still
-              persists locally in this browser; folder-backed projects need a Chromium-based
-              browser.
+              persists locally in this browser; folder-backed projects need a
+              Chromium-based browser.
             </p>
           )}
 
@@ -59,6 +66,18 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
                   Disconnect
                 </button>
               </div>
+            ) : folderStatus === 'needs-permission' ? (
+              <div className="mt-1 space-y-1">
+                <p className="text-xs text-gray-600">
+                  A workspace folder is remembered but needs permission again.
+                </p>
+                <button
+                  className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700"
+                  onClick={() => void reconnectWorkspace()}
+                >
+                  Reconnect folder
+                </button>
+              </div>
             ) : (
               <button
                 className="mt-1 rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
@@ -70,59 +89,58 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
             )}
           </section>
 
-          {workspace && (
-            <>
-              {/* Save current as project */}
-              <section>
-                <h3 className="text-sm font-semibold text-gray-700">
-                  Save current file as a project
-                </h3>
-                {fileName && sourceBytes ? (
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
-                      placeholder="Project name"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                    />
-                    <button
-                      className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
-                      disabled={newName.trim() === ''}
-                      onClick={() => {
-                        void saveAsProject(newName.trim());
-                        setNewName('');
-                      }}
+          <>
+            {/* Existing projects */}
+            <section>
+              <h3 className="text-sm font-semibold text-gray-700">Projects</h3>
+              {projects.length === 0 ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  No projects yet — load a GEDCOM to create one.
+                </p>
+              ) : (
+                <ul className="mt-1 space-y-1">
+                  {projects.map((name) => (
+                    <li
+                      key={name}
+                      className={`flex items-center justify-between gap-2 rounded border p-2 text-sm ${
+                        name === projectName
+                          ? 'border-blue-400 bg-blue-50'
+                          : 'border-gray-200'
+                      }`}
                     >
-                      Save project
-                    </button>
-                  </div>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-500">Load a GEDCOM file first.</p>
-                )}
-              </section>
-
-              {/* Existing projects */}
-              <section>
-                <h3 className="text-sm font-semibold text-gray-700">Projects</h3>
-                {projects.length === 0 ? (
-                  <p className="mt-1 text-xs text-gray-500">No projects yet.</p>
-                ) : (
-                  <ul className="mt-1 space-y-1">
-                    {projects.map((name) => (
-                      <li
-                        key={name}
-                        className={`flex items-center justify-between gap-2 rounded border p-2 text-sm ${
-                          name === projectName
-                            ? 'border-blue-400 bg-blue-50'
-                            : 'border-gray-200'
-                        }`}
-                      >
-                        <span className="min-w-0 truncate">
-                          {name}
-                          {name === projectName && (
-                            <span className="ml-1 text-[11px] text-blue-600">(open)</span>
-                          )}
+                      <span className="min-w-0 truncate">
+                        {name}
+                        {name === projectName && (
+                          <span className="ml-1 text-[11px] text-blue-600">(open)</span>
+                        )}
+                        {!workspace && (
+                          <span className="ml-1 text-[11px] text-gray-400">
+                            (this browser)
+                          </span>
+                        )}
+                      </span>
+                      {pendingDelete === name ? (
+                        <span className="flex shrink-0 items-center gap-1">
+                          <span className="text-xs text-red-700">
+                            Delete &quot;{name}&quot; permanently?
+                          </span>
+                          <button
+                            className="rounded bg-red-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-red-700"
+                            onClick={() => {
+                              setPendingDelete(null);
+                              void deleteProjectByName(name);
+                            }}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
+                            onClick={() => setPendingDelete(null)}
+                          >
+                            Cancel
+                          </button>
                         </span>
+                      ) : (
                         <span className="flex shrink-0 gap-1">
                           <button
                             className="rounded border border-gray-300 px-2 py-0.5 text-xs hover:bg-white"
@@ -132,45 +150,45 @@ export function WorkspaceModal({ onClose }: { onClose: () => void }) {
                           </button>
                           <button
                             className="rounded border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
-                            onClick={() => void deleteProjectByName(name)}
+                            onClick={() => setPendingDelete(name)}
                           >
-                            Delete
+                            Delete…
                           </button>
                         </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              {/* Rename current */}
-              {projectName && (
-                <section>
-                  <h3 className="text-sm font-semibold text-gray-700">
-                    Rename current project
-                  </h3>
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
-                      placeholder={projectName}
-                      value={renameTo}
-                      onChange={(e) => setRenameTo(e.target.value)}
-                    />
-                    <button
-                      className="rounded border border-gray-300 px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                      disabled={renameTo.trim() === ''}
-                      onClick={() => {
-                        void renameCurrentProject(renameTo.trim());
-                        setRenameTo('');
-                      }}
-                    >
-                      Rename
-                    </button>
-                  </div>
-                </section>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
-            </>
-          )}
+            </section>
+
+            {/* Rename current */}
+            {projectName && (
+              <section>
+                <h3 className="text-sm font-semibold text-gray-700">
+                  Rename current project
+                </h3>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    className="flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
+                    placeholder={projectName}
+                    value={renameTo}
+                    onChange={(e) => setRenameTo(e.target.value)}
+                  />
+                  <button
+                    className="rounded border border-gray-300 px-3 py-1 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                    disabled={renameTo.trim() === ''}
+                    onClick={() => {
+                      void renameCurrentProject(renameTo.trim());
+                      setRenameTo('');
+                    }}
+                  >
+                    Rename
+                  </button>
+                </div>
+              </section>
+            )}
+          </>
         </div>
       </div>
     </div>

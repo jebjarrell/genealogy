@@ -1,7 +1,8 @@
-import type { Event, GenealogyModel, Graph, Person, Place } from '../types/index.js';
+import type { GenealogyModel, Graph, Place } from '../types/index.js';
 import { getAncestors } from '../graph/traversal.js';
 import { computeGenerations } from '../graph/generations.js';
 import { militaryServiceOf } from '../military/wars.js';
+import { firstEvent } from '../model/person-events.js';
 
 // Family analytics over the focal person's DIRECT ANCESTORS (the owner's chosen
 // scope). All pure arithmetic on data already in hand — no LLM, no network.
@@ -73,24 +74,10 @@ function regionOf(place: Place): string | undefined {
   return last;
 }
 
-function firstEvent(
-  person: Person,
-  model: GenealogyModel,
-  type: Event['type'],
-): Event | undefined {
-  for (const id of person.eventIds) {
-    const e = model.events.get(id);
-    if (e?.type === type) return e;
-  }
-  return undefined;
-}
-
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1]! + sorted[mid]!) / 2
-    : sorted[mid]!;
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
 }
 
 function round1(n: number): number {

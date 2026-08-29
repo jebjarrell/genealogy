@@ -1,5 +1,10 @@
-import { describeRelationship, personSketch, militaryServiceRecords } from '@genealogy/core';
+import {
+  describeRelationship,
+  personSketch,
+  militaryServiceRecords,
+} from '@genealogy/core';
 import { useStore } from '../state/store.js';
+import { RelationshipList } from './RelationshipList.js';
 import { useEditorStore } from '../state/editorStore.js';
 import { allEventsOf, primaryName } from '../graph/personDisplay.js';
 import { PlaceResolveButton } from './PlaceResolveButton.js';
@@ -24,42 +29,6 @@ const EVENT_LABELS: Record<string, string> = {
   occupation: 'Occupation',
   other: 'Event',
 };
-
-function RelationshipList({ title, ids }: { title: string; ids: string[] }) {
-  const model = useStore((s) => s.model);
-  const graph = useStore((s) => s.graph);
-  const focalPersonId = useStore((s) => s.focalPersonId);
-  const selectPerson = useStore((s) => s.selectPerson);
-  if (!model || ids.length === 0) return null;
-  return (
-    <div className="mt-2">
-      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-        {title}
-      </div>
-      <ul className="mt-1 space-y-0.5">
-        {ids.map((id) => {
-          const person = model.persons.get(id);
-          if (!person) return null;
-          const rel =
-            graph && focalPersonId && focalPersonId !== id
-              ? describeRelationship(graph, model, focalPersonId, id)
-              : null;
-          return (
-            <li key={id}>
-              <button
-                className="text-left text-sm text-blue-700 hover:underline"
-                onClick={() => selectPerson(id)}
-              >
-                {primaryName(person)}
-              </button>
-              {rel && <span className="ml-1 text-xs text-gray-400">({rel})</span>}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
 
 // FamilySearch-style bio sketch shown at the top of the profile. The full event,
 // relationship, and source lists remain below it (owner's choice).
@@ -93,27 +62,26 @@ function BioSketch({ personId }: { personId: string }) {
         )}
       </Row>
       <Row label="Spouse">
-        {sketch.spouses.length === 0 ? (
-          '—'
-        ) : (
-          sketch.spouses.map((sp, i) => (
-            <span key={sp.id}>
-              {i > 0 && ', '}
-              <button
-                className="text-blue-700 hover:underline"
-                onClick={() => selectPerson(sp.id)}
-              >
-                {sp.name}
-              </button>
-            </span>
-          ))
-        )}
+        {sketch.spouses.length === 0
+          ? '—'
+          : sketch.spouses.map((sp, i) => (
+              <span key={sp.id}>
+                {i > 0 && ', '}
+                <button
+                  className="text-blue-700 hover:underline"
+                  onClick={() => selectPerson(sp.id)}
+                >
+                  {sp.name}
+                </button>
+              </span>
+            ))}
       </Row>
       <Row label="Children">{sketch.childrenCount}</Row>
       <Row label="Military">
         {sketch.military.served ? (
           <span className="font-medium text-emerald-700">
-            Yes{sketch.military.wars.length > 0 && ` · ${sketch.military.wars.join(', ')}`}
+            Yes
+            {sketch.military.wars.length > 0 && ` · ${sketch.military.wars.join(', ')}`}
           </span>
         ) : (
           'No'
@@ -213,7 +181,7 @@ export function DetailPanel() {
   const setFocal = useStore((s) => s.setFocal);
   const expand = useStore((s) => s.expand);
   const openEditPerson = useEditorStore((s) => s.openEditPerson);
-  const openAddPerson = useEditorStore((s) => s.openAddPerson);
+  const openAttach = useEditorStore((s) => s.openAttach);
   const openAddEvent = useEditorStore((s) => s.openAddEvent);
   const openEditEvent = useEditorStore((s) => s.openEditEvent);
 
@@ -300,19 +268,19 @@ export function DetailPanel() {
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'parent', personId: person.id })}
+          onClick={() => openAttach('parent', person.id)}
         >
           + Parent
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'child', personId: person.id })}
+          onClick={() => openAttach('child', person.id)}
         >
           + Child
         </button>
         <button
           className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-          onClick={() => openAddPerson({ relation: 'spouse', personId: person.id })}
+          onClick={() => openAttach('spouse', person.id)}
         >
           + Spouse
         </button>
@@ -361,9 +329,21 @@ export function DetailPanel() {
         </div>
       )}
 
-      <RelationshipList title="Parents" ids={parents} />
-      <RelationshipList title="Spouses" ids={spouses} />
-      <RelationshipList title="Children" ids={children} />
+      <RelationshipList
+        title="Parents"
+        ids={parents}
+        detach={{ direction: 'parent', childId: person.id }}
+      />
+      <RelationshipList
+        title="Spouses"
+        ids={spouses}
+        detach={{ direction: 'spouse', personId: person.id }}
+      />
+      <RelationshipList
+        title="Children"
+        ids={children}
+        detach={{ direction: 'child', parentId: person.id }}
+      />
 
       {person.sources.length > 0 && (
         <div className="mt-2 text-[11px] text-gray-400">

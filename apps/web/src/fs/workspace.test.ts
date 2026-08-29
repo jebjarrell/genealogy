@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { MemDir } from './memfs.js';
 import { Workspace } from './workspace.js';
 import { parseProject, serializeProject, newProject } from './project.js';
+import { sha256Hex } from './hash.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 const GED = bytes('0 HEAD\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n');
@@ -82,12 +83,16 @@ describe('Workspace — vault (content-hash dedup)', () => {
   });
 
   it('adds a PDF and records it in the manifest', async () => {
-    const res = await ws.addDocument(bytes('%PDF-1.4 cert'), 'birth.pdf', 'application/pdf');
+    const res = await ws.addDocument(
+      bytes('%PDF-1.4 cert'),
+      'birth.pdf',
+      'application/pdf',
+    );
     expect(res).not.toBeNull();
     expect(res!.deduped).toBe(false);
     expect(res!.doc.mimetype).toBe('application/pdf');
     expect(res!.doc.filename.endsWith('.pdf')).toBe(true);
-    expect((await ws.listDocuments())).toHaveLength(1);
+    expect(await ws.listDocuments()).toHaveLength(1);
   });
 
   it('dedupes identical bytes instead of storing a second copy', async () => {
@@ -95,7 +100,7 @@ describe('Workspace — vault (content-hash dedup)', () => {
     const b = await ws.addDocument(bytes('same'), 'again.png', 'image/png');
     expect(b!.deduped).toBe(true);
     expect(b!.doc.docId).toBe(a!.doc.docId);
-    expect((await ws.listDocuments())).toHaveLength(1);
+    expect(await ws.listDocuments()).toHaveLength(1);
   });
 
   it('rejects unsupported file types', async () => {
@@ -120,5 +125,124 @@ describe('project (de)serialization', () => {
     expect(back!.name).toBe('P');
     expect(parseProject('{"format":"something-else"}')).toBeNull();
     expect(parseProject('not json')).toBeNull();
+  });
+});
+
+describe('Workspace — source hashing for import matching', () => {
+  it('stores a sourceHash on create and reports it in summaries', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Hashed', GED, 'h.ged', 'deadbeef');
+    expect((await ws.openProject('Hashed'))!.project.sourceHash).toBe('deadbeef');
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Hashed', sourceHash: 'deadbeef' },
+    ]);
+  });
+
+  it('defaults sourceHash to empty string for projects written before this field', () => {
+    const legacy = JSON.stringify({
+      format: 'genealogy-graph/project',
+      version: 1,
+      name: 'Old',
+      sourceFile: 'source.ged',
+      sourceFileName: 'old.ged',
+    });
+    expect(parseProject(legacy)!.sourceHash).toBe('');
+  });
+
+  it('skips unreadable project folders when summarizing', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Good', GED, 'g.ged', 'aaa');
+    // A folder with no project.json - e.g. one the user created by hand.
+    const projects = await ws.root.getDir('projects', true);
+    await projects!.getDir('Empty', true);
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Good', sourceHash: 'aaa' },
+    ]);
+  });
+
+  // Regression test (final review, 5a): readSummary used to fall back to the
+  // temp file only when project.json was *absent*, while openProject also fell
+  // back when it was present but unparseable. writeProjectFile truncates
+  // project.json on open, so a drive that drops out mid-write leaves exactly
+  // that state: a 0-byte project.json beside a complete .tmp. A null summary
+  // makes the autosave's "is this folder project mine?" guard skip entirely,
+  // and our op-log gets written beside a stranger's source.ged.
+  it('summarizes from the temp file when project.json is present but truncated', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Interrupted', GED, 'i.ged', 'good-hash');
+    const projects = await ws.root.getDir('projects', false);
+    const dir = await projects!.getDir('Interrupted', false);
+    // Exactly what a drive disconnect between truncate and write leaves behind.
+    const tmp = await dir!.getFile('project.json.tmp', true);
+    await tmp!.write(
+      serializeProject(newProject('Interrupted', 'i.ged', 'source.ged', 'good-hash')),
+    );
+    const main = await dir!.getFile('project.json', true);
+    await main!.write('');
+
+    expect(await ws.projectSummary('Interrupted')).toEqual({
+      name: 'Interrupted',
+      sourceHash: 'good-hash',
+    });
+    // ...and the same recovery openProject already had.
+    expect((await ws.openProject('Interrupted'))!.project.sourceHash).toBe('good-hash');
+  });
+
+  it('skips malformed project.json when summarizing', async () => {
+    const ws = new Workspace(new MemDir());
+    await ws.createProject('Good', GED, 'g.ged', 'bbb');
+    // A folder with broken project.json - parseProject returns null on bad JSON.
+    const projects = await ws.root.getDir('projects', true);
+    const badDir = await projects!.getDir('Bad', true);
+    const badFile = await badDir!.getFile('project.json', true);
+    await badFile!.write('{not valid json}');
+    expect(await ws.listProjectSummaries()).toEqual([
+      { name: 'Good', sourceHash: 'bbb' },
+    ]);
+  });
+});
+
+describe('Workspace — compareSource (is this folder project mine?)', () => {
+  let ws: Workspace;
+  beforeEach(() => {
+    ws = new Workspace(new MemDir());
+  });
+
+  it('reports absent when no such project folder exists', async () => {
+    expect(await ws.compareSource('Nope', 'h1')).toBe('absent');
+  });
+
+  it('matches a declared hash and rejects a different one', async () => {
+    await ws.createProject('P', GED, 'p.ged', 'h1');
+    expect(await ws.compareSource('P', 'h1')).toBe('match');
+    expect(await ws.compareSource('P', 'h2')).toBe('differs');
+  });
+
+  // A declared '' is the pre-hash placeholder: UNKNOWN, not "matches anything".
+  // Settled from the bytes on disk so a legacy copy of our own project is still
+  // recognised as ours (and keeps mirroring) while a stranger's is not.
+  it("settles a declared '' hash from the bytes on disk, both ways", async () => {
+    await ws.createProject('Legacy', GED, 'l.ged'); // hash ''
+    const real = await sha256Hex(GED);
+    expect(await ws.compareSource('Legacy', real)).toBe('match');
+    expect(await ws.compareSource('Legacy', 'not-the-same-tree')).toBe('differs');
+  });
+
+  it('recovers the declared hash from the temp file when project.json is truncated', async () => {
+    await ws.createProject('P', GED, 'p.ged', 'h1');
+    const projects = await ws.root.getDir('projects', false);
+    const dir = await projects!.getDir('P', false);
+    const tmp = await dir!.getFile('project.json.tmp', true);
+    await tmp!.write(serializeProject(newProject('P', 'p.ged', 'source.ged', 'h1')));
+    await (await dir!.getFile('project.json', true))!.write('');
+
+    expect(await ws.compareSource('P', 'h1')).toBe('match');
+    expect(await ws.compareSource('P', 'h2')).toBe('differs');
+  });
+
+  it('reports unknown when nothing in the folder identifies the tree', async () => {
+    const projects = await ws.root.getDir('projects', true);
+    await projects!.getDir('Handmade', true); // no project.json, no source.ged
+    expect(await ws.compareSource('Handmade', 'h1')).toBe('unknown');
   });
 });

@@ -40,6 +40,23 @@ export interface AddDocumentResult {
   deduped: boolean;
 }
 
+/**
+ * The result of asking whether a folder project holds the tree a caller has
+ * open. Only 'match' means "safe to write over"; everything else is either
+ * "nothing there" or "we cannot prove it is ours."
+ *
+ *   absent   - no project folder of that name at all.
+ *   match    - same tree: the declared hash matches, or (when the folder
+ *              declares no hash) the bytes on disk hash to the same value.
+ *   differs  - a different tree lives there. Writing would strand our op-log
+ *              beside someone else's GEDCOM.
+ *   unknown  - the folder exists but nothing in it identifies the tree: no
+ *              readable project.json AND no readable source. Indistinguishable
+ *              from 'differs' for safety purposes, and kept separate only so a
+ *              caller can word its refusal accurately.
+ */
+export type SourceComparison = 'absent' | 'match' | 'differs' | 'unknown';
+
 export class Workspace {
   constructor(public readonly root: FsDir) {}
 
@@ -63,6 +80,101 @@ export class Workspace {
     return (await this.listProjects()).includes(name);
   }
 
+  /**
+   * Read one project folder's project.json, falling back to the temp file
+   * whenever the main file is absent *or unreadable*. Both halves matter:
+   * writeProjectFile truncates project.json on open, so a drive that drops out
+   * mid-write leaves a 0-byte project.json sitting beside a complete
+   * project.json.tmp. Treating that as "no project here" would let a caller
+   * conclude the folder is unclaimed and write over a real project.
+   *
+   * Single source of truth for both openProject() and readSummary() so the two
+   * can never drift apart on which files they are willing to recover from.
+   */
+  private async readProjectFile(dir: FsDir): Promise<ProjectFile | null> {
+    const main = await dir.getFile(PROJECT_JSON, false);
+    let project = main ? parseProject(await main.readText()) : null;
+    if (!project) {
+      const tmp = await dir.getFile(PROJECT_TMP, false);
+      if (tmp) project = parseProject(await tmp.readText());
+    }
+    return project;
+  }
+
+  /**
+   * Name + content hash for one project, read from its project.json alone so
+   * the (potentially huge) source.ged is never touched. Null when the folder or
+   * its project.json is absent or unreadable (after the temp-file fallback).
+   */
+  private async readSummary(
+    parent: FsDir,
+    name: string,
+  ): Promise<{ name: string; sourceHash: string } | null> {
+    const dir = await parent.getDir(name, false);
+    const project = dir ? await this.readProjectFile(dir) : null;
+    return project ? { name, sourceHash: project.sourceHash } : null;
+  }
+
+  /**
+   * Does the folder project `name` hold the same tree as `sourceHash`? This is
+   * the guard that keeps an autosave (or a rename) from writing our metadata
+   * over a different family tree that happens to share a name.
+   *
+   * A declared sourceHash of '' means UNKNOWN - it is the placeholder for
+   * project.json files written before the field existed - so it must never be
+   * read as "matches whatever you have." It is settled from the bytes on disk
+   * instead of guessed: hashing the source once is the only way to tell a
+   * legacy copy of our own project from a stranger's, and the answer is
+   * durable, because the write that follows a 'match' stamps the real hash into
+   * project.json and no later run has to hash anything again.
+   */
+  async compareSource(name: string, sourceHash: string): Promise<SourceComparison> {
+    const parent = await this.projectsDir(false);
+    const dir = parent ? await parent.getDir(name, false) : null;
+    if (!dir) return 'absent';
+
+    const project = await this.readProjectFile(dir);
+    if (project?.sourceHash) {
+      return project.sourceHash === sourceHash ? 'match' : 'differs';
+    }
+    const file = await dir.getFile(project?.sourceFile ?? SOURCE_GED, false);
+    if (!file) return 'unknown';
+    const onDisk = await sha256Hex(await file.read());
+    // An empty `sourceHash` from the caller can never match a real hash, which
+    // is the intended outcome: a caller that does not know its own content
+    // hash has not proven anything about this folder either.
+    return onDisk === sourceHash ? 'match' : 'differs';
+  }
+
+  /**
+   * Summary for a single named project. Lets a caller that already knows the
+   * name check what is on disk without paying for a full listing - the autosave
+   * mirror does this on every run.
+   */
+  async projectSummary(
+    name: string,
+  ): Promise<{ name: string; sourceHash: string } | null> {
+    const parent = await this.projectsDir(false);
+    return parent ? this.readSummary(parent, name) : null;
+  }
+
+  /**
+   * Name + content hash for every project on disk. Used to match an imported
+   * GEDCOM against existing folder projects without reading their sources.
+   * Folders without a readable project.json are skipped rather than failing
+   * the whole listing.
+   */
+  async listProjectSummaries(): Promise<{ name: string; sourceHash: string }[]> {
+    const out: { name: string; sourceHash: string }[] = [];
+    const parent = await this.projectsDir(false);
+    if (!parent) return out;
+    for (const name of await this.listProjects()) {
+      const summary = await this.readSummary(parent, name);
+      if (summary) out.push(summary);
+    }
+    return out;
+  }
+
   /** Atomically write project.json into the given project folder. */
   private async writeProjectFile(dir: FsDir, project: ProjectFile): Promise<void> {
     const text = serializeProject({ ...project, updatedAt: new Date().toISOString() });
@@ -77,6 +189,7 @@ export class Workspace {
     name: string,
     gedcomBytes: Uint8Array,
     sourceFileName: string,
+    sourceHash = '',
   ): Promise<ProjectFile> {
     const parent = await this.projectsDir(true);
     if (!parent) throw new Error('Cannot open the projects folder.');
@@ -86,7 +199,7 @@ export class Workspace {
     const source = await dir.getFile(SOURCE_GED, true);
     if (source) await source.write(gedcomBytes);
 
-    const project = newProject(name, sourceFileName, SOURCE_GED);
+    const project = newProject(name, sourceFileName, SOURCE_GED, sourceHash);
     await this.writeProjectFile(dir, project);
     return project;
   }
@@ -99,13 +212,7 @@ export class Workspace {
     if (!dir) return null;
 
     // Prefer project.json; fall back to the temp file if a write was interrupted.
-    let project: ProjectFile | null = null;
-    const main = await dir.getFile(PROJECT_JSON, false);
-    if (main) project = parseProject(await main.readText());
-    if (!project) {
-      const tmp = await dir.getFile(PROJECT_TMP, false);
-      if (tmp) project = parseProject(await tmp.readText());
-    }
+    const project = await this.readProjectFile(dir);
     if (!project) return null;
 
     const source = await dir.getFile(project.sourceFile, false);
@@ -220,7 +327,9 @@ export class Workspace {
   }
 
   /** Read a stored document's bytes (for preview / open). */
-  async readDocument(docId: string): Promise<{ bytes: Uint8Array; doc: VaultDoc } | null> {
+  async readDocument(
+    docId: string,
+  ): Promise<{ bytes: Uint8Array; doc: VaultDoc } | null> {
     const index = await this.readVaultIndex();
     const doc = index.documents.find((d) => d.docId === docId);
     if (!doc) return null;

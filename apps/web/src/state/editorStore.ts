@@ -21,12 +21,21 @@ export interface EventEditorState {
   eventId?: string;
 }
 
+/** Attaching someone to `personId`; the modal decides new-vs-existing. */
+export interface AttachState {
+  relation: AttachRelation;
+  personId: string;
+}
+
 interface EditorStore {
   person: PersonEditorState | null;
   event: EventEditorState | null;
+  attach: AttachState | null;
   openAddPerson: (attach?: PersonEditorState['attach']) => void;
   openEditPerson: (personId: string) => void;
   closePerson: () => void;
+  openAttach: (relation: AttachRelation, personId: string) => void;
+  closeAttach: () => void;
   openAddEvent: (personId: string) => void;
   openEditEvent: (personId: string, eventId: string) => void;
   closeEvent: () => void;
@@ -35,9 +44,13 @@ interface EditorStore {
 export const useEditorStore = create<EditorStore>((set) => ({
   person: null,
   event: null,
-  openAddPerson: (attach) => set({ person: { mode: 'add', ...(attach ? { attach } : {}) } }),
+  attach: null,
+  openAddPerson: (attach) =>
+    set({ person: { mode: 'add', ...(attach ? { attach } : {}) } }),
   openEditPerson: (personId) => set({ person: { mode: 'edit', personId } }),
   closePerson: () => set({ person: null }),
+  openAttach: (relation, personId) => set({ attach: { relation, personId } }),
+  closeAttach: () => set({ attach: null }),
   openAddEvent: (personId) => set({ event: { personId } }),
   openEditEvent: (personId, eventId) => set({ event: { personId, eventId } }),
   closeEvent: () => set({ event: null }),
